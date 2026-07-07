@@ -1,0 +1,61 @@
+services:
+  api:
+    build: .
+    container_name: evently-api
+    restart: unless-stopped
+    # init: true runs the container under an init process (tini) so SIGTERM is
+    # forwarded cleanly and zombie processes are reaped — pairs with the app's
+    # graceful-shutdown hooks.
+    init: true
+    env_file: .env
+    environment:
+      # Point at the compose services instead of localhost.
+      # Comment these out to use your Atlas MONGO_URI from .env.
+      REDIS_HOST: redis
+      # MONGO_URI: mongodb://mongo:27017/evently_db
+    ports:
+      - '3000:3000'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_started
+
+  redis:
+    image: redis:7-alpine
+    container_name: evently-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - redis-data:/data
+
+  mongo:
+    image: mongo:7
+    container_name: evently-mongo
+    restart: unless-stopped
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongo-data:/data/db
+
+volumes:
+  redis-data:
+  mongo-data:

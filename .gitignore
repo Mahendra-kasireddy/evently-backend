@@ -1,2 +1,18 @@
 node_modules/
+dist/
+.env
+.env.local
+
+# logs
+*.log
+logs/
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/
+
+# build / coverage
+coverage/
+*.tsbuildinfo
 .env
