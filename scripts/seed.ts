@@ -264,23 +264,55 @@ const customerHomeContent = {
   },
 };
 
-// ---- customer-plan content (Plan Event wizard copy/config) ----
+// ---- Plan Event normalized config collections ----
+// Occasions offered on the wizard's first step.
+const planOccasions = [
+  { key: 'wedding', label: 'Wedding', art: 'wedding', order: 0, active: true },
+  { key: 'birthday', label: 'Birthday', art: 'birthday', order: 1, active: true },
+  { key: 'housewarming', label: 'Housewarming', art: 'housewarming', order: 2, active: true },
+  { key: 'naming', label: 'Naming', art: 'naming', order: 3, active: true },
+  { key: 'anniversary', label: 'Anniversary', art: 'anniversary', order: 4, active: true },
+  { key: 'corporate', label: 'Corporate', art: 'corporate', order: 5, active: true },
+];
+
+// City options for the "event details" step.
+const planCities = [
+  { name: 'Hyderabad', order: 0, active: true },
+  { name: 'Bangalore', order: 1, active: true },
+  { name: 'Chennai', order: 2, active: true },
+  { name: 'Mumbai', order: 3, active: true },
+  { name: 'Pune', order: 4, active: true },
+  { name: 'Delhi', order: 5, active: true },
+];
+
+// Coarse guest-count buckets.
+const planGuestRanges = [
+  { value: '50', order: 0, active: true },
+  { value: '100', order: 1, active: true },
+  { value: '200', order: 2, active: true },
+  { value: '300', order: 3, active: true },
+  { value: '500+', order: 4, active: true },
+];
+
+// Service categories the customer can request; `keywords` drive organizer matching.
+const planServiceCategories = [
+  { key: 'food', title: 'Food / Catering', subtitle: 'Per-plate menu', icon: 'food', keywords: ['catering', 'food', 'full service'], order: 0, active: true },
+  { key: 'water', title: 'Drinking Water', subtitle: 'Branded bottles', icon: 'water', keywords: ['water', 'catering', 'full service'], order: 1, active: true },
+  { key: 'decoration', title: 'Decoration', subtitle: 'Theme & florals', icon: 'decor', keywords: ['decor', 'decoration', 'full service'], order: 2, active: true },
+  { key: 'photography', title: 'Photography & Video', subtitle: 'Photos, reels, album', icon: 'photo', keywords: ['photo', 'photography', 'full service'], order: 3, active: true },
+  { key: 'music', title: 'Music & Sound', subtitle: 'DJ / live band', icon: 'music', keywords: ['music', 'sound', 'dj', 'full service'], order: 4, active: true },
+  { key: 'priest', title: 'Priest / Pandit', subtitle: 'Rituals & muhurtham', icon: 'priest', keywords: ['priest', 'pandit', 'full service'], order: 5, active: true },
+  { key: 'mehendi', title: 'Mehendi Artist', subtitle: 'Bridal & guests', icon: 'mehendi', keywords: ['mehendi', 'full service'], order: 6, active: true },
+  { key: 'transport', title: 'Transportation', subtitle: 'Guest pickup', icon: 'transport', keywords: ['transport', 'travel', 'full service'], order: 7, active: true },
+];
+
+// ---- customer-plan content (Plan Event wizard copy/config — CMS only) ----
 const customerPlanContent = {
-  occasions: [
-    { id: 'wedding', label: 'Wedding', art: 'wedding' },
-    { id: 'birthday', label: 'Birthday', art: 'birthday' },
-    { id: 'housewarming', label: 'Housewarming', art: 'housewarming' },
-    { id: 'naming', label: 'Naming', art: 'naming' },
-    { id: 'anniversary', label: 'Anniversary', art: 'anniversary' },
-    { id: 'corporate', label: 'Corporate', art: 'corporate' },
-  ],
   steps: [
     { id: 'details', label: 'Event details', heading: '', subtitle: 'Share a few details and your ideas. Verified organizers send tailored quotes — no pricing needed now.' },
     { id: 'categories', label: 'Categories', heading: "What's on your checklist?", subtitle: 'Choose the services you need. Organizers quote only for what you select — nothing extra.' },
     { id: 'organizers', label: 'Find organizers', heading: 'Find your perfect organizer', subtitle: 'Verified, certified and rated by real families. Compare, request quotes, and book the one that fits.' },
   ],
-  cityOptions: ['Hyderabad', 'Bangalore', 'Chennai', 'Mumbai', 'Pune', 'Delhi'],
-  guestOptions: ['50', '100', '200', '300', '500+'],
   subtitle: 'Share a few details and your ideas. Verified organizers send tailored quotes — no pricing needed now.',
   trust: [
     { icon: 'zap', label: 'Quotes in a day' },
@@ -302,22 +334,6 @@ const customerPlanContent = {
   quoteNote: { title: 'Quotation by organizers', text: 'No budget needed now — price is finalized after organizers review your needs.' },
   continueLabel: 'Continue to categories',
   footnote: 'Verified organizers only. Comparing quotes is always free.',
-  categories: [
-    { id: 'food', title: 'Food / Catering', subtitle: 'Per-plate menu', icon: 'food' },
-    { id: 'water', title: 'Drinking Water', subtitle: 'Branded bottles', icon: 'water' },
-    { id: 'decoration', title: 'Decoration', subtitle: 'Theme & florals', icon: 'decor' },
-    { id: 'photography', title: 'Photography & Video', subtitle: 'Photos, reels, album', icon: 'photo' },
-    { id: 'music', title: 'Music & Sound', subtitle: 'DJ / live band', icon: 'music' },
-    { id: 'priest', title: 'Priest / Pandit', subtitle: 'Rituals & muhurtham', icon: 'priest' },
-    { id: 'mehendi', title: 'Mehendi Artist', subtitle: 'Bridal & guests', icon: 'mehendi' },
-    { id: 'transport', title: 'Transportation', subtitle: 'Guest pickup', icon: 'transport' },
-  ],
-  organizers: [
-    { id: 'sharma', initials: 'SE', name: 'Sharma Events', avatarColor: '#7c5bd6', tier: 'Gold', rating: 4.8, reviews: 128, events: 214, location: 'Banjara Hills', tags: ['Catering', 'Decor', 'Photography'], matches: 6, total: 6, estRange: '₹2.4L – 3.2L' },
-    { id: 'telugu', initials: 'TV', name: 'Telugu Vibes', avatarColor: '#1d9e75', tier: 'Platinum', rating: 4.9, reviews: 201, events: 340, location: 'Banjara Hills', tags: ['Full service', 'Decor'], matches: 6, total: 6, estRange: '₹2.8L – 4.1L' },
-    { id: 'ravi', initials: 'RE', name: 'Ravi Events', avatarColor: '#1a2e5a', tier: 'Silver', rating: 4.6, reviews: 82, events: 96, location: 'Banjara Hills', tags: ['Photography', 'Music'], matches: 5, total: 6, estRange: '₹1.8L – 2.6L' },
-    { id: 'mangala', initials: 'MC', name: 'Mangala Celebrations', avatarColor: '#c2502a', tier: 'Gold', rating: 4.7, reviews: 154, events: 178, location: 'Banjara Hills', tags: ['Catering', 'Priest'], matches: 5, total: 6, estRange: '₹2.2L – 3.0L' },
-  ],
   filters: {
     tiers: ['Bronze', 'Silver', 'Gold', 'Platinum'],
     ratings: ['4.0+', '4.5+', '4.8+'],
@@ -325,6 +341,26 @@ const customerPlanContent = {
     sorts: ['Sort: Rating', 'Price', 'Most events', '4.5+ ★'],
   },
 };
+
+async function seedPlanConfig() {
+  const sets: Array<{ collection: string; key: string; docs: Record<string, unknown>[] }> = [
+    { collection: 'plan_occasions', key: 'key', docs: planOccasions },
+    { collection: 'plan_cities', key: 'name', docs: planCities },
+    { collection: 'plan_guest_ranges', key: 'value', docs: planGuestRanges },
+    { collection: 'plan_service_categories', key: 'key', docs: planServiceCategories },
+  ];
+  for (const { collection, key, docs } of sets) {
+    const coll = mongoose.connection.collection(collection);
+    for (const doc of docs) {
+      await coll.updateOne(
+        { [key]: doc[key] }, // natural key
+        { $set: { ...doc, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+        { upsert: true },
+      );
+    }
+    console.log(`✓ ${collection} seeded (${docs.length})`);
+  }
+}
 
 async function seedContent() {
   const coll = mongoose.connection.collection('site_content');
@@ -397,6 +433,7 @@ async function main() {
   await seedPackages();
   await seedOrganizers();
   await seedContent();
+  await seedPlanConfig();
   await seedDemoUser();
   await seedDemoBooking();
   await seedDemoNotifications();

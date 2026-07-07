@@ -1,20 +1,19 @@
 import { Injectable } from '@nestjs/common';
-import { ContentService } from '../content/content.service';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+
 import { OrganizerService } from '../organizer/organizer.service';
+import {
+  PlanServiceCategory,
+  PlanServiceCategoryDocument,
+} from './schemas/plan-service-category.schema';
 
-export const CUSTOMER_PLAN_KEY = 'customer-plan';
-
-/** Maps a plan category id to keywords used to test an organizer's service tags. */
-const CATEGORY_KEYWORDS: Record<string, string[]> = {
-  food: ['catering', 'food', 'full service'],
-  water: ['water', 'catering', 'full service'],
-  decoration: ['decor', 'decoration', 'full service'],
-  photography: ['photo', 'photography', 'full service'],
-  music: ['music', 'sound', 'dj', 'full service'],
-  priest: ['priest', 'pandit', 'full service'],
-  mehendi: ['mehendi', 'full service'],
-  transport: ['transport', 'travel', 'full service'],
-};
+export interface RecommendationContext {
+  categories: string[];
+  occasion?: string;
+  guests?: string;
+  city?: string;
+}
 
 export interface MatchedOrganizer {
   id: string;
@@ -33,33 +32,50 @@ export interface MatchedOrganizer {
 }
 
 /**
- * Plan Event screen module (BFF). Serves the wizard copy from content and the
- * matched-organizers list from the real organizer_profiles collection.
+ * Recommendation engine for the Plan Event "find organizers" step. Scores the
+ * real `organizer_profiles` collection against the customer's selected service
+ * categories (keyword-matched from `plan_service_categories`) plus soft signals
+ * for city, then returns them ordered by relevance.
  */
 @Injectable()
 export class PlanService {
   constructor(
-    private readonly contentService: ContentService,
     private readonly organizerService: OrganizerService,
+    @InjectModel(PlanServiceCategory.name)
+    private readonly serviceCategoryModel: Model<PlanServiceCategoryDocument>,
   ) {}
 
-  getPlanScreen() {
-    return this.contentService.getData(CUSTOMER_PLAN_KEY);
+  /** Builds a category-key → keywords lookup from the service-category collection. */
+  private async keywordMap(): Promise<Record<string, string[]>> {
+    const cats = await this.serviceCategoryModel.find().exec();
+    const map: Record<string, string[]> = {};
+    for (const c of cats) {
+      map[c.key] = c.keywords?.length ? c.keywords : [c.key.toLowerCase()];
+    }
+    return map;
   }
 
-  /** Real organizers scored against the user's selected categories. */
-  async getOrganizers(categoryIds: string[]): Promise<MatchedOrganizer[]> {
-    const organizers = await this.organizerService.findAllActive();
-    const total = categoryIds.length;
+  /** Real organizers scored against the plan context. */
+  async recommend(ctx: RecommendationContext): Promise<MatchedOrganizer[]> {
+    const [organizers, keywords] = await Promise.all([
+      this.organizerService.findAllActive(),
+      this.keywordMap(),
+    ]);
 
-    return organizers.map((o) => {
+    const total = ctx.categories.length;
+    const city = ctx.city?.trim().toLowerCase();
+
+    const scored = organizers.map((o) => {
       const lowerTags = o.tags.map((t) => t.toLowerCase());
-      const matches = categoryIds.filter((cat) => {
-        const keywords = CATEGORY_KEYWORDS[cat] ?? [cat.toLowerCase()];
-        return keywords.some((kw) => lowerTags.some((tag) => tag.includes(kw)));
+      const matches = ctx.categories.filter((cat) => {
+        const kws = keywords[cat] ?? [cat.toLowerCase()];
+        return kws.some((kw) => lowerTags.some((tag) => tag.includes(kw)));
       }).length;
 
-      return {
+      // Soft relevance boost: same-city organizers surface first.
+      const cityBoost = city && o.location.toLowerCase().includes(city) ? 1 : 0;
+
+      const view: MatchedOrganizer = {
         id: o._id.toString(),
         initials: o.initials,
         name: o.name,
@@ -74,6 +90,9 @@ export class PlanService {
         total,
         estRange: o.estRange,
       };
+      return { view, score: matches * 10 + cityBoost * 3 + o.rating };
     });
+
+    return scored.sort((a, b) => b.score - a.score).map((s) => s.view);
   }
 }
