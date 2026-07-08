@@ -48,6 +48,10 @@ export class PlanSubmission {
   @Prop({ trim: true, default: '' })
   guests: string;
 
+  // Optional budget bucket display value (references plan_budget_ranges.value).
+  @Prop({ trim: true, default: '' })
+  budget: string;
+
   @Prop({ trim: true, default: '', maxlength: 5000 })
   ideas: string;
 

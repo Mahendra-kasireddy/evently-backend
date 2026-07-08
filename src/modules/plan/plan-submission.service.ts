@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
@@ -8,6 +8,8 @@ import {
   PlanSubmissionDocument,
 } from './schemas/plan-submission.schema';
 import { UpsertPlanDto } from './dto/upsert-plan.dto';
+import { NotificationService } from '../notification/notification.service';
+import { NotificationType } from '../notification/schemas/notification.schema';
 
 /**
  * Persistence for customer event plans: a single resumable draft per customer,
@@ -15,10 +17,31 @@ import { UpsertPlanDto } from './dto/upsert-plan.dto';
  */
 @Injectable()
 export class PlanSubmissionService {
+  private readonly logger = new Logger(PlanSubmissionService.name);
+
   constructor(
     @InjectModel(PlanSubmission.name)
     private readonly planModel: Model<PlanSubmissionDocument>,
+    private readonly notificationService: NotificationService,
   ) {}
+
+  /**
+   * Fire a "plan submitted" notification to the customer. Best-effort: a failed
+   * notification must never roll back a successfully persisted plan.
+   */
+  private async notifySubmitted(userId: string, plan: PlanSubmissionDocument): Promise<void> {
+    try {
+      await this.notificationService.create(
+        userId,
+        'Your event plan is in',
+        `We've sent your ${plan.occasion || 'event'} plan (${plan.planCode}) to matched organizers. Tailored quotes arrive within a day.`,
+        NotificationType.SYSTEM,
+        '/workspace',
+      );
+    } catch (err) {
+      this.logger.warn(`Failed to emit plan-submitted notification: ${String(err)}`);
+    }
+  }
 
   private static generatePlanCode(): string {
     return `PLN-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
@@ -60,16 +83,20 @@ export class PlanSubmissionService {
         status: PlanStatus.SUBMITTED,
         planCode: draft.planCode ?? PlanSubmissionService.generatePlanCode(),
       });
-      return draft.save();
+      const saved = await draft.save();
+      await this.notifySubmitted(userId, saved);
+      return saved;
     }
 
-    return this.planModel.create({
+    const created = await this.planModel.create({
       ...dto,
       occasion: dto.occasion ?? '',
       customer,
       status: PlanStatus.SUBMITTED,
       planCode: PlanSubmissionService.generatePlanCode(),
     });
+    await this.notifySubmitted(userId, created);
+    return created;
   }
 
   /** All plans owned by the customer, most recently updated first. */

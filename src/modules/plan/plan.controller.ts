@@ -62,6 +62,13 @@ export class PlanController {
 
   @Public()
   @PublicCache(120, 600)
+  @Get('budget-ranges')
+  getBudgetRanges() {
+    return this.configService.getBudgetRanges();
+  }
+
+  @Public()
+  @PublicCache(120, 600)
   @Get('service-categories')
   getServiceCategories() {
     return this.configService.getServiceCategories();
@@ -92,7 +99,13 @@ export class PlanController {
           .map((c) => c.trim())
           .filter(Boolean)
       : [];
-    return { categories, occasion: query.occasion, guests: query.guests, city: query.city };
+    return {
+      categories,
+      occasion: query.occasion,
+      guests: query.guests,
+      city: query.city,
+      budget: query.budget,
+    };
   }
 
   // ----- Persistence (authenticated customer) -----

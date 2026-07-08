@@ -177,15 +177,23 @@ async function seedDemoBooking() {
         title: 'Your Wedding · 28 Dec 2026',
         description:
           'Sharma Events is managing every vendor. Review the plan, approve your invitation, and track progress — all in one workspace.',
+        occasion: 'Wedding',
+        location: 'Banjara Hills, Hyderabad',
         eventDate: new Date('2026-12-28'),
-        progress: 82,
+        amount: 284600,
+        progress: 70,
         steps: [
-          { label: 'Organizer booked', done: true },
-          { label: 'Vendors locked', done: true },
-          { label: 'Invitation', done: false },
-          { label: 'Final walkthrough', done: false },
+          { label: 'Booking placed', done: true },
+          { label: 'Organizer confirmed', done: true },
+          { label: 'Event in progress', done: true },
+          { label: 'Completed', done: false },
         ],
-        status: 'active',
+        timeline: [
+          { status: 'pending', label: 'Booking placed — awaiting organizer confirmation', note: '', at: new Date('2026-06-01') },
+          { status: 'confirmed', label: 'Organizer confirmed your booking', note: '', at: new Date('2026-06-02') },
+          { status: 'in_progress', label: 'Your event is now in progress', note: '', at: new Date('2026-06-20') },
+        ],
+        status: 'in_progress',
         updatedAt: new Date(),
       },
       $setOnInsert: { createdAt: new Date() },
@@ -294,6 +302,15 @@ const planGuestRanges = [
   { value: '500+', order: 4, active: true },
 ];
 
+// Optional budget buckets (display strings). Configurable — tune without a deploy.
+const planBudgetRanges = [
+  { value: 'Under ₹1L', order: 0, active: true },
+  { value: '₹1L – 3L', order: 1, active: true },
+  { value: '₹3L – 5L', order: 2, active: true },
+  { value: '₹5L – 10L', order: 3, active: true },
+  { value: '₹10L+', order: 4, active: true },
+];
+
 // Service categories the customer can request; `keywords` drive organizer matching.
 const planServiceCategories = [
   { key: 'food', title: 'Food / Catering', subtitle: 'Per-plate menu', icon: 'food', keywords: ['catering', 'food', 'full service'], order: 0, active: true },
@@ -312,6 +329,7 @@ const customerPlanContent = {
     { id: 'details', label: 'Event details', heading: '', subtitle: 'Share a few details and your ideas. Verified organizers send tailored quotes — no pricing needed now.' },
     { id: 'categories', label: 'Categories', heading: "What's on your checklist?", subtitle: 'Choose the services you need. Organizers quote only for what you select — nothing extra.' },
     { id: 'organizers', label: 'Find organizers', heading: 'Find your perfect organizer', subtitle: 'Verified, certified and rated by real families. Compare, request quotes, and book the one that fits.' },
+    { id: 'review', label: 'Review', heading: 'Review & submit', subtitle: 'Check everything looks right, then submit your plan and request a quote. You can go back and edit any step.' },
   ],
   subtitle: 'Share a few details and your ideas. Verified organizers send tailored quotes — no pricing needed now.',
   trust: [
@@ -330,7 +348,7 @@ const customerPlanContent = {
     suggestions: ['Surprise entry', 'Live food counters', 'Drone photography', 'Marigold & maroon theme', 'Eco-friendly setup', 'Kids play zone'],
     placeholder: 'e.g. Surprise drone petal-shower during the garland exchange, marigold theme, a live dosa counter for the cousins…',
   },
-  budgetBanner: 'No need to set a budget. Organizers send tailored quotes after reviewing your event — you compare and pick what fits.',
+  budgetBanner: 'Budget is optional. Share a rough range to help organizers tailor quotes, or skip it — you compare and pick what fits either way.',
   quoteNote: { title: 'Quotation by organizers', text: 'No budget needed now — price is finalized after organizers review your needs.' },
   continueLabel: 'Continue to categories',
   footnote: 'Verified organizers only. Comparing quotes is always free.',
@@ -347,6 +365,7 @@ async function seedPlanConfig() {
     { collection: 'plan_occasions', key: 'key', docs: planOccasions },
     { collection: 'plan_cities', key: 'name', docs: planCities },
     { collection: 'plan_guest_ranges', key: 'value', docs: planGuestRanges },
+    { collection: 'plan_budget_ranges', key: 'value', docs: planBudgetRanges },
     { collection: 'plan_service_categories', key: 'key', docs: planServiceCategories },
   ];
   for (const { collection, key, docs } of sets) {
@@ -427,6 +446,85 @@ async function seedDemoNotifications() {
   console.log(`✓ demo notifications attached to ${phone}`);
 }
 
+// ---- demo quotes (per-user) ----
+// Creates one submitted quote request for the demo customer plus two real
+// quotations (from seeded organizers) so the /quotes compare screen has live,
+// MongoDB-backed data to render. Gated on SEED_DEMO_PHONE like the others.
+async function seedDemoQuotes() {
+  const phone = process.env.SEED_DEMO_PHONE;
+  if (!phone) return;
+  const users = mongoose.connection.collection('users');
+  const user = await users.findOne({ phone });
+  if (!user) return;
+
+  const organizersColl = mongoose.connection.collection('organizer_profiles');
+  const orgA = await organizersColl.findOne({ name: 'Sharma Events' });
+  const orgB = await organizersColl.findOne({ name: 'Mangala Celebrations' });
+  if (!orgA || !orgB) {
+    console.log('• skipped demo quotes — seed organizers first.');
+    return;
+  }
+
+  const requests = mongoose.connection.collection('quote_requests');
+  const quotations = mongoose.connection.collection('quotations');
+
+  const reqKey = { customer: user._id, occasion: 'Wedding', when: '28 Dec' };
+  await requests.updateOne(
+    reqKey,
+    {
+      $set: {
+        ...reqKey,
+        organizer: null,
+        where: 'Banjara Hills, Hyderabad',
+        guests: '300',
+        status: 'quoted',
+        updatedAt: new Date(),
+      },
+      $setOnInsert: { createdAt: new Date() },
+    },
+    { upsert: true },
+  );
+  const request = await requests.findOne(reqKey);
+  if (!request) return;
+
+  const makeLines = (food: number, water: number, decor: number, photo: number) => [
+    { key: 'food', title: 'Food / Catering', subtitle: '300 plates', price: food, note: 'Menu customisable at the tasting.', subItems: [{ label: 'Veg deluxe thali', value: `300 × ₹${Math.round(food / 300)}` }, { label: 'Welcome drinks', value: 'Included' }] },
+    { key: 'water', title: 'Drinking Water', subtitle: '400 bottles', price: water, note: '', subItems: [{ label: 'Branded 500ml bottles', value: `400 × ₹${Math.round(water / 400)}` }] },
+    { key: 'decoration', title: 'Decoration', subtitle: 'Theme & florals', price: decor, note: '', subItems: [{ label: 'Stage & mandap', value: 'Included' }, { label: 'Fresh florals', value: 'Marigold & rose' }] },
+    { key: 'photography', title: 'Photography & Video', subtitle: 'Full coverage', price: photo, note: '', subItems: [{ label: 'Candid + traditional', value: '2 shooters' }] },
+  ];
+
+  const build = (org: typeof orgA, lines: ReturnType<typeof makeLines>) => {
+    const subtotal = lines.reduce((s, l) => s + l.price, 0);
+    const taxAmount = Math.round(subtotal * 0.18);
+    return {
+      request: request._id,
+      organizer: org._id,
+      customer: user._id,
+      lineItems: lines,
+      subtotal,
+      taxRate: 18,
+      taxAmount,
+      grandTotal: subtotal + taxAmount,
+      notes: '',
+      status: 'sent',
+    };
+  };
+
+  const seeds = [
+    build(orgA, makeLines(105000, 6000, 45000, 35000)),
+    build(orgB, makeLines(98000, 5600, 41000, 33000)),
+  ];
+  for (const q of seeds) {
+    await quotations.updateOne(
+      { request: q.request, organizer: q.organizer },
+      { $set: { ...q, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+      { upsert: true },
+    );
+  }
+  console.log(`✓ demo quotes (1 request · ${seeds.length} quotations) attached to ${phone}`);
+}
+
 async function main() {
   await mongoose.connect(MONGO_URI as string);
   console.log('connected to MongoDB');
@@ -437,6 +535,7 @@ async function main() {
   await seedDemoUser();
   await seedDemoBooking();
   await seedDemoNotifications();
+  await seedDemoQuotes();
   await mongoose.disconnect();
   console.log('done.');
 }

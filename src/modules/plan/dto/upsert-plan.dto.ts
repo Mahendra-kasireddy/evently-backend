@@ -33,6 +33,11 @@ export class UpsertPlanDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(40)
+  budget?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(5000)
   ideas?: string;
 

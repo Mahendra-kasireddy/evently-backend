@@ -6,6 +6,7 @@ import { ContentService } from '../content/content.service';
 import { PlanOccasion, PlanOccasionDocument } from './schemas/plan-occasion.schema';
 import { PlanCity, PlanCityDocument } from './schemas/plan-city.schema';
 import { PlanGuestRange, PlanGuestRangeDocument } from './schemas/plan-guest-range.schema';
+import { PlanBudgetRange, PlanBudgetRangeDocument } from './schemas/plan-budget-range.schema';
 import {
   PlanServiceCategory,
   PlanServiceCategoryDocument,
@@ -42,6 +43,8 @@ export class PlanConfigService {
     private readonly cityModel: Model<PlanCityDocument>,
     @InjectModel(PlanGuestRange.name)
     private readonly guestRangeModel: Model<PlanGuestRangeDocument>,
+    @InjectModel(PlanBudgetRange.name)
+    private readonly budgetRangeModel: Model<PlanBudgetRangeDocument>,
     @InjectModel(PlanServiceCategory.name)
     private readonly serviceCategoryModel: Model<PlanServiceCategoryDocument>,
   ) {}
@@ -64,6 +67,11 @@ export class PlanConfigService {
     return docs.map((g) => g.value);
   }
 
+  async getBudgetRanges(): Promise<string[]> {
+    const docs = await this.budgetRangeModel.find({ active: true }).sort({ order: 1 }).exec();
+    return docs.map((b) => b.value);
+  }
+
   async getServiceCategories(): Promise<PlanServiceCategoryView[]> {
     const docs = await this.serviceCategoryModel
       .find({ active: true })
@@ -79,19 +87,22 @@ export class PlanConfigService {
 
   /** Full wizard screen payload (aggregated — one request for the whole screen). */
   async getPlanScreen(): Promise<Record<string, unknown>> {
-    const [copy, occasions, cityOptions, guestOptions, categories] = await Promise.all([
-      this.contentService.getData(CUSTOMER_PLAN_KEY),
-      this.getOccasions(),
-      this.getCities(),
-      this.getGuestRanges(),
-      this.getServiceCategories(),
-    ]);
+    const [copy, occasions, cityOptions, guestOptions, budgetOptions, categories] =
+      await Promise.all([
+        this.contentService.getData(CUSTOMER_PLAN_KEY),
+        this.getOccasions(),
+        this.getCities(),
+        this.getGuestRanges(),
+        this.getBudgetRanges(),
+        this.getServiceCategories(),
+      ]);
 
     return {
       ...copy,
       occasions,
       cityOptions,
       guestOptions,
+      budgetOptions,
       categories,
     };
   }

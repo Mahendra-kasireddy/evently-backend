@@ -7,6 +7,8 @@ export type QuoteRequestDocument = HydratedDocument<QuoteRequest>;
 export enum QuoteRequestStatus {
   OPEN = 'open', // awaiting organizer quotes
   QUOTED = 'quoted', // at least one quote received
+  ACCEPTED = 'accepted', // customer accepted a quotation
+  CANCELLED = 'cancelled', // customer cancelled the request
   CLOSED = 'closed',
 }
 
@@ -39,6 +41,10 @@ export class QuoteRequest {
 
   @Prop({ type: String, enum: QuoteRequestStatus, default: QuoteRequestStatus.OPEN, index: true })
   status: QuoteRequestStatus;
+
+  // Provided by { timestamps: true } — declared so they are typed on the document.
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 export const QuoteRequestSchema = SchemaFactory.createForClass(QuoteRequest);

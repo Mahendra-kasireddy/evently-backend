@@ -13,6 +13,8 @@ export interface RecommendationContext {
   occasion?: string;
   guests?: string;
   city?: string;
+  // Optional budget bucket the customer picked; used as a soft ranking signal.
+  budget?: string;
 }
 
 export interface MatchedOrganizer {

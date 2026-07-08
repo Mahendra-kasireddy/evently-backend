@@ -25,4 +25,9 @@ export class RecommendationQueryDto {
   @IsString()
   @MaxLength(120)
   city?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  budget?: string;
 }

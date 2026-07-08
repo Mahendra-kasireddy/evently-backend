@@ -30,4 +30,10 @@ export class OrganizerService {
     if (!organizer) throw new NotFoundException('Organizer not found');
     return organizer;
   }
+
+  /** The organizer profile owned by a given user account (null if none). */
+  findByUser(userId: string): Promise<OrganizerProfileDocument | null> {
+    if (!Types.ObjectId.isValid(userId)) return Promise.resolve(null);
+    return this.organizerModel.findOne({ user: new Types.ObjectId(userId) }).exec();
+  }
 }
