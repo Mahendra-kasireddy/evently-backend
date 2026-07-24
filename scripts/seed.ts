@@ -62,6 +62,8 @@ async function seedPackages() {
 }
 
 // ---- organizers ----
+// Enriched with the data the recommendation engine scores on: occasions,
+// service areas, guest capacity, per-service pricing, responsiveness, venue.
 const organizers = [
   {
     name: 'Sharma Events',
@@ -73,6 +75,24 @@ const organizers = [
     events: 214,
     tags: ['Catering', 'Decor', 'Photography'],
     location: 'Banjara Hills',
+    serviceAreas: ['Banjara Hills', 'Jubilee Hills', 'Gachibowli'],
+    occasions: ['wedding', 'anniversary', 'naming'],
+    capacityMin: 50,
+    capacityMax: 600,
+    basePrice: 40000,
+    pricePerGuest: 350,
+    categoryRates: [
+      { key: 'food', price: 350, perGuest: true },
+      { key: 'water', price: 15, perGuest: true },
+      { key: 'decoration', price: 60000, perGuest: false },
+      { key: 'photography', price: 45000, perGuest: false },
+      { key: 'priest', price: 15000, perGuest: false },
+    ],
+    responseRate: 96,
+    responseHours: 3,
+    busyDates: [],
+    indoor: true,
+    outdoor: true,
     estRange: '₹2.4L – 3.2L',
     rank: 30,
     active: true,
@@ -87,6 +107,23 @@ const organizers = [
     events: 96,
     tags: ['Photography', 'Music'],
     location: 'Jubilee Hills',
+    serviceAreas: ['Jubilee Hills', 'Madhapur', 'Kondapur'],
+    occasions: ['birthday', 'corporate', 'housewarming'],
+    capacityMin: 20,
+    capacityMax: 300,
+    basePrice: 25000,
+    pricePerGuest: 300,
+    categoryRates: [
+      { key: 'food', price: 300, perGuest: true },
+      { key: 'water', price: 14, perGuest: true },
+      { key: 'photography', price: 35000, perGuest: false },
+      { key: 'music', price: 40000, perGuest: false },
+    ],
+    responseRate: 88,
+    responseHours: 6,
+    busyDates: [],
+    indoor: true,
+    outdoor: false,
     estRange: '₹1.8L – 2.6L',
     rank: 20,
     active: true,
@@ -99,8 +136,29 @@ const organizers = [
     rating: 4.9,
     reviews: 201,
     events: 340,
-    tags: ['Full service', 'Decor'],
+    tags: ['Full service', 'Decor', 'Catering', 'Photography', 'Music'],
     location: 'Gachibowli',
+    serviceAreas: ['Gachibowli', 'Financial District', 'Kokapet', 'Banjara Hills'],
+    occasions: ['wedding', 'birthday', 'corporate', 'anniversary', 'housewarming', 'naming'],
+    capacityMin: 100,
+    capacityMax: 1200,
+    basePrice: 60000,
+    pricePerGuest: 420,
+    categoryRates: [
+      { key: 'food', price: 420, perGuest: true },
+      { key: 'water', price: 15, perGuest: true },
+      { key: 'decoration', price: 80000, perGuest: false },
+      { key: 'photography', price: 50000, perGuest: false },
+      { key: 'music', price: 45000, perGuest: false },
+      { key: 'priest', price: 18000, perGuest: false },
+      { key: 'mehendi', price: 25000, perGuest: false },
+      { key: 'transport', price: 35000, perGuest: false },
+    ],
+    responseRate: 99,
+    responseHours: 2,
+    busyDates: [],
+    indoor: true,
+    outdoor: true,
     estRange: '₹2.8L – 4.1L',
     rank: 40,
     active: true,
@@ -115,8 +173,66 @@ const organizers = [
     events: 178,
     tags: ['Catering', 'Priest'],
     location: 'Kukatpally',
+    serviceAreas: ['Kukatpally', 'Miyapur', 'KPHB'],
+    occasions: ['wedding', 'naming', 'housewarming'],
+    capacityMin: 50,
+    capacityMax: 500,
+    basePrice: 35000,
+    pricePerGuest: 300,
+    categoryRates: [
+      { key: 'food', price: 300, perGuest: true },
+      { key: 'water', price: 13, perGuest: true },
+      { key: 'decoration', price: 50000, perGuest: false },
+      { key: 'priest', price: 15000, perGuest: false },
+    ],
+    responseRate: 92,
+    responseHours: 8,
+    busyDates: [],
+    indoor: true,
+    outdoor: true,
     estRange: '₹2.2L – 3.0L',
     rank: 25,
+    active: true,
+  },
+  {
+    // Evently's own concierge — covers every service, occasion and area so the
+    // recommendation list is never empty. Surfaced after real matches.
+    name: 'Evently Concierge',
+    initials: 'EV',
+    avatarColor: '#e8633a',
+    tier: 'Platinum',
+    rating: 4.8,
+    reviews: 500,
+    events: 1000,
+    tags: ['Full service', 'Catering', 'Decor', 'Photography', 'Music', 'Priest', 'Mehendi', 'Transport'],
+    location: 'Hyderabad',
+    serviceAreas: [
+      'Hyderabad', 'Banjara Hills', 'Jubilee Hills', 'Gachibowli', 'Madhapur',
+      'Kondapur', 'Kukatpally', 'Miyapur', 'Secunderabad', 'Financial District',
+    ],
+    occasions: ['wedding', 'birthday', 'housewarming', 'naming', 'anniversary', 'corporate'],
+    capacityMin: 10,
+    capacityMax: 5000,
+    basePrice: 30000,
+    pricePerGuest: 320,
+    categoryRates: [
+      { key: 'food', price: 320, perGuest: true },
+      { key: 'water', price: 14, perGuest: true },
+      { key: 'decoration', price: 55000, perGuest: false },
+      { key: 'photography', price: 42000, perGuest: false },
+      { key: 'music', price: 40000, perGuest: false },
+      { key: 'priest', price: 15000, perGuest: false },
+      { key: 'mehendi', price: 22000, perGuest: false },
+      { key: 'transport', price: 30000, perGuest: false },
+    ],
+    responseRate: 100,
+    responseHours: 1,
+    busyDates: [],
+    indoor: true,
+    outdoor: true,
+    concierge: true,
+    estRange: '',
+    rank: 0,
     active: true,
   },
 ];
@@ -381,6 +497,123 @@ async function seedPlanConfig() {
   }
 }
 
+// ---- Organizer onboarding config collections (Step 1) ----
+// Business/legal structure options.
+const businessTypes = [
+  { key: 'individual', label: 'Individual / Freelancer', order: 0, active: true },
+  { key: 'sole_proprietor', label: 'Sole Proprietorship', order: 1, active: true },
+  { key: 'partnership', label: 'Partnership', order: 2, active: true },
+  { key: 'llp', label: 'Limited Liability Partnership (LLP)', order: 3, active: true },
+  { key: 'private_limited', label: 'Private Limited Company', order: 4, active: true },
+  { key: 'agency', label: 'Agency', order: 5, active: true },
+];
+
+// Kind-of-organizer categories (distinct from customer service categories).
+const organizerCategories = [
+  { key: 'wedding_planner', label: 'Wedding Planner', icon: 'heart', order: 0, active: true },
+  { key: 'event_decorator', label: 'Event Decorator', icon: 'sparkles', order: 1, active: true },
+  { key: 'caterer', label: 'Caterer', icon: 'utensils', order: 2, active: true },
+  { key: 'photographer', label: 'Photographer / Videographer', icon: 'camera', order: 3, active: true },
+  { key: 'full_service', label: 'Full-Service Event Company', icon: 'briefcase', order: 4, active: true },
+  { key: 'birthday_planner', label: 'Birthday & Party Planner', icon: 'gift', order: 5, active: true },
+  { key: 'corporate_events', label: 'Corporate Events', icon: 'building', order: 6, active: true },
+];
+
+async function seedOrganizerConfig() {
+  const sets: Array<{ collection: string; key: string; docs: Record<string, unknown>[] }> = [
+    { collection: 'business_types', key: 'key', docs: businessTypes },
+    { collection: 'organizer_categories', key: 'key', docs: organizerCategories },
+  ];
+  for (const { collection, key, docs } of sets) {
+    const coll = mongoose.connection.collection(collection);
+    for (const doc of docs) {
+      await coll.updateOne(
+        { [key]: doc[key] }, // natural key
+        { $set: { ...doc, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+        { upsert: true },
+      );
+    }
+    console.log(`✓ ${collection} seeded (${docs.length})`);
+  }
+}
+
+// ---- Organizer services config collections (Step 4) ----
+const experienceRanges = [
+  { key: '0-1', label: 'Less than 1 year', order: 0, active: true },
+  { key: '1-3', label: '1–3 years', order: 1, active: true },
+  { key: '3-5', label: '3–5 years', order: 2, active: true },
+  { key: '5-10', label: '5–10 years', order: 3, active: true },
+  { key: '10+', label: '10+ years', order: 4, active: true },
+];
+const teamSizes = [
+  { key: 'solo', label: 'Just me', order: 0, active: true },
+  { key: '2-5', label: '2–5 people', order: 1, active: true },
+  { key: '6-10', label: '6–10 people', order: 2, active: true },
+  { key: '11-25', label: '11–25 people', order: 3, active: true },
+  { key: '25+', label: '25+ people', order: 4, active: true },
+];
+const languages = [
+  { key: 'english', label: 'English', order: 0, active: true },
+  { key: 'hindi', label: 'Hindi', order: 1, active: true },
+  { key: 'telugu', label: 'Telugu', order: 2, active: true },
+  { key: 'tamil', label: 'Tamil', order: 3, active: true },
+  { key: 'kannada', label: 'Kannada', order: 4, active: true },
+  { key: 'marathi', label: 'Marathi', order: 5, active: true },
+  { key: 'bengali', label: 'Bengali', order: 6, active: true },
+];
+const travelOptions = [
+  { key: 'no_travel', label: 'No travel', order: 0, active: true },
+  { key: 'city_only', label: 'Within city', order: 1, active: true },
+  { key: 'state_wide', label: 'Within state', order: 2, active: true },
+  { key: 'pan_india', label: 'Anywhere in India', order: 3, active: true },
+  { key: 'international', label: 'International', order: 4, active: true },
+];
+const paymentMethods = [
+  { key: 'cash', label: 'Cash', order: 0, active: true },
+  { key: 'upi', label: 'UPI', order: 1, active: true },
+  { key: 'bank_transfer', label: 'Bank transfer', order: 2, active: true },
+  { key: 'card', label: 'Credit / Debit card', order: 3, active: true },
+  { key: 'cheque', label: 'Cheque', order: 4, active: true },
+];
+const workingDays = [
+  { key: 'mon', label: 'Monday', order: 0, active: true },
+  { key: 'tue', label: 'Tuesday', order: 1, active: true },
+  { key: 'wed', label: 'Wednesday', order: 2, active: true },
+  { key: 'thu', label: 'Thursday', order: 3, active: true },
+  { key: 'fri', label: 'Friday', order: 4, active: true },
+  { key: 'sat', label: 'Saturday', order: 5, active: true },
+  { key: 'sun', label: 'Sunday', order: 6, active: true },
+];
+const documentTypes = [
+  { key: 'aadhaar', label: 'Aadhaar Card', order: 0, active: true },
+  { key: 'passport', label: 'Passport', order: 1, active: true },
+  { key: 'voter_id', label: 'Voter ID', order: 2, active: true },
+  { key: 'driving_license', label: 'Driving License', order: 3, active: true },
+];
+
+async function seedOrganizerServicesConfig() {
+  const sets: Array<{ collection: string; docs: Record<string, unknown>[] }> = [
+    { collection: 'experience_ranges', docs: experienceRanges },
+    { collection: 'team_sizes', docs: teamSizes },
+    { collection: 'languages', docs: languages },
+    { collection: 'travel_options', docs: travelOptions },
+    { collection: 'payment_methods', docs: paymentMethods },
+    { collection: 'working_days', docs: workingDays },
+    { collection: 'document_types', docs: documentTypes },
+  ];
+  for (const { collection, docs } of sets) {
+    const coll = mongoose.connection.collection(collection);
+    for (const doc of docs) {
+      await coll.updateOne(
+        { key: doc.key },
+        { $set: { ...doc, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+        { upsert: true },
+      );
+    }
+    console.log(`✓ ${collection} seeded (${docs.length})`);
+  }
+}
+
 async function seedContent() {
   const coll = mongoose.connection.collection('site_content');
   await coll.updateOne(
@@ -532,6 +765,8 @@ async function main() {
   await seedOrganizers();
   await seedContent();
   await seedPlanConfig();
+  await seedOrganizerConfig();
+  await seedOrganizerServicesConfig();
   await seedDemoUser();
   await seedDemoBooking();
   await seedDemoNotifications();

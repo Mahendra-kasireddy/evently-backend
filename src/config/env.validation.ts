@@ -59,4 +59,15 @@ export const envValidationSchema = Joi.object({
   FIREBASE_PROJECT_ID: Joi.string().allow('').optional(),
   FIREBASE_CLIENT_EMAIL: Joi.string().allow('').optional(),
   FIREBASE_PRIVATE_KEY: Joi.string().allow('').optional(),
+
+  // Uploads. `local` (default) needs nothing else; `s3` requires bucket + keys.
+  UPLOAD_DRIVER: Joi.string().valid('local', 's3').default('local'),
+  UPLOAD_PUBLIC_BASE_URL: Joi.string().allow('').optional(),
+  UPLOAD_LOCAL_DIR: Joi.string().default('uploads'),
+  S3_ENDPOINT: Joi.string().allow('').optional(),
+  S3_REGION: Joi.string().default('us-east-1'),
+  S3_FORCE_PATH_STYLE: Joi.boolean().optional(),
+  S3_BUCKET: Joi.string().when('UPLOAD_DRIVER', { is: 's3', then: Joi.required() }),
+  S3_ACCESS_KEY_ID: Joi.string().when('UPLOAD_DRIVER', { is: 's3', then: Joi.required() }),
+  S3_SECRET_ACCESS_KEY: Joi.string().when('UPLOAD_DRIVER', { is: 's3', then: Joi.required() }),
 });

@@ -14,6 +14,7 @@ export enum QuotationStatus {
 }
 
 /** A single priced line on a quotation, e.g. "Food / Catering — ₹1,05,000". */
+@Schema({ _id: false })
 export class QuotationLine {
   @Prop({ trim: true, default: '' })
   key: string; // category key (drives the FE icon), e.g. "food"
@@ -38,6 +39,7 @@ export class QuotationLine {
   })
   subItems: Array<{ label: string; value: string }>;
 }
+export const QuotationLineSchema = SchemaFactory.createForClass(QuotationLine);
 
 @Schema({
   timestamps: true,
@@ -57,7 +59,7 @@ export class Quotation {
   @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
   customer: Types.ObjectId;
 
-  @Prop({ type: [QuotationLine], default: [], _id: false })
+  @Prop({ type: [QuotationLineSchema], default: [] })
   lineItems: QuotationLine[];
 
   // Money is stored as numbers (rupees); the client formats for display.

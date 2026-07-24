@@ -65,4 +65,25 @@ export default () => ({
     clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
     privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
   },
+
+  // Reusable file-upload module. `driver=s3` for any S3-compatible store
+  // (AWS S3, Cloudflare R2, DigitalOcean Spaces, MinIO); `driver=local` for
+  // development only (files written under `local.dir`, served via /upload/file).
+  upload: {
+    driver: process.env.UPLOAD_DRIVER ?? 'local',
+    // Public base URL used to build returned file URLs (e.g. CDN / bucket host).
+    publicBaseUrl: process.env.UPLOAD_PUBLIC_BASE_URL ?? '',
+    s3: {
+      endpoint: process.env.S3_ENDPOINT || undefined, // set for R2/Spaces/MinIO
+      region: process.env.S3_REGION ?? 'us-east-1',
+      bucket: process.env.S3_BUCKET,
+      accessKeyId: process.env.S3_ACCESS_KEY_ID,
+      secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+      // Path-style is required by MinIO and some S3-compatible providers.
+      forcePathStyle: process.env.S3_FORCE_PATH_STYLE === 'true',
+    },
+    local: {
+      dir: process.env.UPLOAD_LOCAL_DIR ?? 'uploads',
+    },
+  },
 });

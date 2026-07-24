@@ -18,6 +18,7 @@ export enum BookingStatus {
 export const ONGOING_BOOKING_STATUSES = [BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS];
 
 /** A single status-change entry, powering the booking timeline. */
+@Schema({ _id: false })
 export class BookingTimelineEntry {
   @Prop({ required: true, trim: true })
   status: string;
@@ -31,6 +32,7 @@ export class BookingTimelineEntry {
   @Prop({ type: Date, default: () => new Date() })
   at: Date;
 }
+export const BookingTimelineEntrySchema = SchemaFactory.createForClass(BookingTimelineEntry);
 
 @Schema({
   timestamps: true,
@@ -84,7 +86,7 @@ export class Booking {
   steps: { label: string; done: boolean }[];
 
   // Chronological status history.
-  @Prop({ type: [BookingTimelineEntry], default: [], _id: false })
+  @Prop({ type: [BookingTimelineEntrySchema], default: [] })
   timeline: BookingTimelineEntry[];
 
   @Prop({ type: String, enum: BookingStatus, default: BookingStatus.PENDING, index: true })

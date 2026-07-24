@@ -107,6 +107,22 @@ export class PlanSubmissionService {
       .exec();
   }
 
+  /**
+   * The customer's most recent *active* plan (draft or submitted), used by the
+   * Home "Current Event" resolver. BOOKED/CANCELLED plans are excluded — once a
+   * plan is booked the booking record is the source of truth, and cancelled
+   * plans are not "current". Returns null when there is none.
+   */
+  getLatestActiveForUser(userId: string): Promise<PlanSubmissionDocument | null> {
+    return this.planModel
+      .findOne({
+        customer: this.toObjectId(userId),
+        status: { $in: [PlanStatus.DRAFT, PlanStatus.SUBMITTED] },
+      })
+      .sort({ updatedAt: -1 })
+      .exec();
+  }
+
   async findOne(userId: string, id: string): Promise<PlanSubmissionDocument> {
     if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Plan not found');
     const plan = await this.planModel

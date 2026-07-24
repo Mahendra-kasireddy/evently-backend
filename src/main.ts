@@ -38,11 +38,14 @@ async function bootstrap() {
   // Versioned-ish base path: /api/...
   app.setGlobalPrefix(apiPrefix, { exclude: ['health'] });
 
-  // DTO validation + transformation everywhere
+  // DTO validation + transformation everywhere. `whitelist` still strips any
+  // property not on the DTO (so junk never reaches services/DB), but we do NOT
+  // reject on unknown fields: a newer frontend that sends an extra field must
+  // degrade gracefully against an older backend rather than 400 the request.
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
-      forbidNonWhitelisted: true,
+      forbidNonWhitelisted: false,
       transform: true,
       transformOptions: { enableImplicitConversion: true },
     }),

@@ -93,18 +93,28 @@ export class PlanController {
   }
 
   private toContext(query: RecommendationQueryDto) {
-    const categories = query.categories
-      ? query.categories
-          .split(',')
-          .map((c) => c.trim())
-          .filter(Boolean)
-      : [];
+    const csv = (v?: string) =>
+      v
+        ? v
+            .split(',')
+            .map((c) => c.trim())
+            .filter(Boolean)
+        : [];
     return {
-      categories,
+      categories: csv(query.categories),
       occasion: query.occasion,
       guests: query.guests,
       city: query.city,
+      area: query.area,
       budget: query.budget,
+      eventDate: query.eventDate,
+      venue: query.venue,
+      minRating: query.minRating ? Number(query.minRating) : undefined,
+      tiers: csv(query.tiers),
+      requireCategories: csv(query.requireCategories),
+      maxPrice: query.maxPrice ? Number(query.maxPrice) : undefined,
+      availableOnly: query.availableOnly === 'true',
+      sort: query.sort,
     };
   }
 

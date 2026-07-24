@@ -69,6 +69,20 @@ export class UserService {
     return user;
   }
 
+  /**
+   * Idempotently adds a role to a user (multi-role supported). Returns the
+   * updated user. Used to upgrade an existing customer to also be an organizer
+   * without creating a duplicate account.
+   */
+  async addRole(id: string, role: Role): Promise<UserDocument> {
+    this.assertObjectId(id);
+    const user = await this.userModel
+      .findByIdAndUpdate(id, { $addToSet: { roles: role } }, { new: true })
+      .exec();
+    if (!user) throw new NotFoundException('User not found');
+    return user;
+  }
+
   // ----- refresh-token lifecycle (used by AuthService) -----
 
   async setRefreshTokenHash(userId: string, token: string | null): Promise<void> {

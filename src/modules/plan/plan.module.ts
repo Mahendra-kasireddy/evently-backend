@@ -40,5 +40,8 @@ import { PlanSubmission, PlanSubmissionSchema } from './schemas/plan-submission.
   ],
   controllers: [PlanController],
   providers: [PlanService, PlanConfigService, PlanSubmissionService],
+  // Exported so the Home BFF can resolve the customer's latest active plan for
+  // the "Current Event" card without duplicating plan persistence logic.
+  exports: [PlanSubmissionService],
 })
 export class PlanModule {}

@@ -22,6 +22,45 @@ import { NotificationType } from '../notification/schemas/notification.schema';
 
 const ORG_FIELDS = 'name initials avatarColor tier rating reviews user';
 
+/** Minimal organizer identity surfaced on the Home "Current Event" card. */
+export interface OrganizerRef {
+  id: string;
+  name: string;
+  initials: string;
+  avatarColor: string;
+  tier: string;
+  rating: number;
+}
+
+/** Latest active quote request summary consumed by the Home BFF resolver. */
+export interface LatestQuoteSummary {
+  id: string;
+  occasion: string;
+  status: QuoteRequestStatus;
+  quoteCount: number;
+  acceptedQuotationId: string | null;
+  organizer: OrganizerRef | null;
+  createdAt: Date | undefined;
+  updatedAt: Date | undefined;
+}
+
+/** Normalizes a populated organizer ref (or ObjectId) into an OrganizerRef. */
+export function toOrganizerRef(org: unknown): OrganizerRef | null {
+  if (!org || typeof org !== 'object') return null;
+  const o = org as Record<string, unknown>;
+  // Unpopulated (plain ObjectId) — no display fields available.
+  if (!('name' in o)) return null;
+  const id = (o._id ?? o.id) as { toString(): string } | undefined;
+  return {
+    id: id ? id.toString() : '',
+    name: String(o.name ?? ''),
+    initials: String(o.initials ?? ''),
+    avatarColor: String(o.avatarColor ?? ''),
+    tier: String(o.tier ?? ''),
+    rating: typeof o.rating === 'number' ? o.rating : 0,
+  };
+}
+
 @Injectable()
 export class QuoteService {
   private readonly logger = new Logger(QuoteService.name);
@@ -216,6 +255,53 @@ export class QuoteService {
       .populate('organizer', ORG_FIELDS)
       .sort({ createdAt: -1 })
       .exec();
+  }
+
+  /**
+   * Latest *active* quote request for the Home "Current Event" resolver, plus a
+   * live count of received quotes and the assigned organizer (targeted request
+   * or, once accepted, the winning quotation's organizer). Cancelled/closed
+   * requests are excluded. Returns null when there is none.
+   *
+   * Reuses the same collections as the workspace/quotes screens — no new data.
+   */
+  async getLatestActiveForUser(userId: string): Promise<LatestQuoteSummary | null> {
+    const customer = new Types.ObjectId(userId);
+    const request = await this.quoteModel
+      .findOne({
+        customer,
+        status: {
+          $in: [QuoteRequestStatus.OPEN, QuoteRequestStatus.QUOTED, QuoteRequestStatus.ACCEPTED],
+        },
+      })
+      .populate('organizer', ORG_FIELDS)
+      .sort({ createdAt: -1 })
+      .exec();
+    if (!request) return null;
+
+    // Live quotes: exclude withdrawn ones so the count matches what the customer
+    // can actually act on.
+    const quotations = await this.quotationModel
+      .find({
+        request: request._id,
+        status: { $ne: QuotationStatus.WITHDRAWN },
+      })
+      .populate('organizer', ORG_FIELDS)
+      .exec();
+
+    const accepted = quotations.find((q) => q.status === QuotationStatus.ACCEPTED);
+    const organizerDoc = accepted?.organizer ?? request.organizer;
+
+    return {
+      id: request._id.toString(),
+      occasion: request.occasion,
+      status: request.status,
+      quoteCount: quotations.length,
+      acceptedQuotationId: accepted?._id.toString() ?? null,
+      organizer: toOrganizerRef(organizerDoc),
+      createdAt: request.createdAt,
+      updatedAt: request.updatedAt,
+    };
   }
 
   private async ownedRequest(userId: string, requestId: string): Promise<QuoteRequestDocument> {

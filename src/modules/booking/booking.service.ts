@@ -28,6 +28,24 @@ export interface ActiveBookingView {
   steps: { label: string; done: boolean }[];
 }
 
+/** Organizer identity attached to a booking summary. */
+export interface BookingOrganizerRef {
+  id: string;
+  name: string;
+  initials: string;
+  avatarColor: string;
+  tier: string;
+  rating: number;
+}
+
+/** Latest live booking summary consumed by the Home "Current Event" resolver. */
+export interface LatestBookingSummary extends ActiveBookingView {
+  status: BookingStatus;
+  organizer: BookingOrganizerRef | null;
+  createdAt: Date | undefined;
+  updatedAt: Date | undefined;
+}
+
 const STATUS_META: Record<BookingStatus, { label: string; progress: number }> = {
   [BookingStatus.PENDING]: {
     label: 'Booking placed — awaiting organizer confirmation',
@@ -164,6 +182,73 @@ export class BookingService {
       daysToGo: this.daysUntil(booking.eventDate),
       steps: booking.steps,
     };
+  }
+
+  /**
+   * Latest *live* booking for the Home "Current Event" resolver — any non-
+   * terminal status (pending → confirmed → in_progress → completed), so the
+   * card can follow the booking from creation through delivery. Terminal
+   * bookings (completed, cancelled, rejected) are excluded so the Home widget
+   * only reflects *live* events — completed events live in My Events history.
+   * Returns null when there is none.
+   *
+   * Reuses the bookings collection consumed by the workspace — no duplicated data.
+   */
+  async getLatestForUser(userId: string): Promise<LatestBookingSummary | null> {
+    const booking = await this.bookingModel
+      .findOne({
+        customer: new Types.ObjectId(userId),
+        status: {
+          $nin: [BookingStatus.CANCELLED, BookingStatus.REJECTED, BookingStatus.COMPLETED],
+        },
+      })
+      .populate('organizer', 'name initials avatarColor tier rating')
+      .sort({ createdAt: -1 })
+      .exec();
+    if (!booking) return null;
+
+    const org = booking.organizer as unknown as Record<string, unknown> | undefined;
+    const organizer =
+      org && typeof org === 'object' && 'name' in org
+        ? {
+            id: (org._id as Types.ObjectId).toString(),
+            name: String(org.name ?? ''),
+            initials: String(org.initials ?? ''),
+            avatarColor: String(org.avatarColor ?? ''),
+            tier: String(org.tier ?? ''),
+            rating: typeof org.rating === 'number' ? org.rating : 0,
+          }
+        : null;
+
+    return {
+      id: booking._id.toString(),
+      ref: booking.ref,
+      title: booking.title,
+      description: booking.description,
+      progress: booking.progress,
+      daysToGo: this.daysUntil(booking.eventDate),
+      steps: booking.steps,
+      status: booking.status,
+      organizer,
+      createdAt: booking.createdAt,
+      updatedAt: booking.updatedAt,
+    };
+  }
+
+  /**
+   * True when a booking already exists for the given quote request (any status).
+   * Lets the Home resolver treat an accepted quote whose booking was already
+   * created — including one that later completed — as no longer "current".
+   */
+  async existsForRequest(userId: string, requestId: string): Promise<boolean> {
+    if (!Types.ObjectId.isValid(requestId)) return false;
+    const count = await this.bookingModel
+      .countDocuments({
+        customer: new Types.ObjectId(userId),
+        request: new Types.ObjectId(requestId),
+      })
+      .exec();
+    return count > 0;
   }
 
   // ---------------------------------------------------------------------------

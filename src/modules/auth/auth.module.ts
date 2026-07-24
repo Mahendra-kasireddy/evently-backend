@@ -22,5 +22,8 @@ import { SmsProvider } from './providers/sms.provider';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, JwtRefreshStrategy, OtpService, SmsProvider],
+  // Exported so other modules (e.g. organizer registration) can issue a fresh
+  // session after mutating a user's roles — reusing the one auth implementation.
+  exports: [AuthService],
 })
 export class AuthModule {}

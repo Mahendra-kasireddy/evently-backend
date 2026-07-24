@@ -87,6 +87,16 @@ export class AuthService {
     await this.userService.setRefreshTokenHash(userId, null);
   }
 
+  /**
+   * Issues a fresh token pair for an already-authenticated user. Used when a
+   * user's roles change mid-session (e.g. a customer upgrades to organizer) so
+   * the new access token reflects the updated roles without a re-login.
+   */
+  async issueSessionForUser(userId: string): Promise<TokenPair> {
+    const user = await this.userService.findById(userId);
+    return this.issueSession(user);
+  }
+
   // ----- internals -----
 
   private async issueSession(user: UserDocument): Promise<TokenPair> {

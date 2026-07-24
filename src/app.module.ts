@@ -22,6 +22,7 @@ import { NotificationModule } from './modules/notification/notification.module';
 import { QuoteModule } from './modules/quote/quote.module';
 import { HomeModule } from './modules/home/home.module';
 import { PlanModule } from './modules/plan/plan.module';
+import { UploadModule } from './modules/upload/upload.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 
 @Module({
@@ -69,6 +70,7 @@ import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
     QuoteModule,
     HomeModule,
     PlanModule,
+    UploadModule,
     // ChatModule — still a stub
   ],
   providers: [
