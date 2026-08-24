@@ -23,6 +23,9 @@ import { QuoteModule } from './modules/quote/quote.module';
 import { HomeModule } from './modules/home/home.module';
 import { PlanModule } from './modules/plan/plan.module';
 import { UploadModule } from './modules/upload/upload.module';
+import { SubvendorModule } from './modules/subvendor/subvendor.module';
+import { InvitationModule } from './modules/invitation/invitation.module';
+import { IdeaModule } from './modules/idea/idea.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 
 @Module({
@@ -71,6 +74,9 @@ import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
     HomeModule,
     PlanModule,
     UploadModule,
+    SubvendorModule,
+    InvitationModule,
+    IdeaModule,
     // ChatModule — still a stub
   ],
   providers: [

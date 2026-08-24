@@ -5,19 +5,41 @@ import {
   Booking,
   BookingDocument,
   BookingStatus,
+  BookingTaskStatus,
   ONGOING_BOOKING_STATUSES,
+  TaskAssignmentStatus,
 } from './schemas/booking.schema';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { UpdateBookingDto } from './dto/update-booking.dto';
 import { UpdateBookingStatusDto } from './dto/update-booking-status.dto';
+import { CreateBookingTaskDto, UpdateBookingTaskDto } from './dto/booking-task.dto';
 import { QuoteService } from '../quote/quote.service';
 import { OrganizerService } from '../organizer/organizer.service';
+import { SubvendorService } from '../subvendor/subvendor.service';
+import { QuoteRequestStatus } from '../quote/schemas/quote-request.schema';
+import { TIER_CONFIG, TIER_ORDER, computeEarnedTier } from '../organizer/tier-config';
 import { NotificationService } from '../notification/notification.service';
 import { NotificationType } from '../notification/schemas/notification.schema';
+import {
+  Invitation,
+  InvitationDocument,
+  InvitationStatus,
+} from '../invitation/schemas/invitation.schema';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { Role } from '../../common/enums/role.enum';
 
-/** Shape consumed by the home "BOOKED" card (matches frontend BookedEventData). */
+/**
+ * Shape consumed by the home "BOOKED" card (matches frontend BookedEventData).
+ *
+ * Built from any *live* booking — pending, confirmed or in progress. Pending is
+ * included deliberately: a booking is created the moment the customer accepts a
+ * quote and pays, but only the organizer can move it to confirmed, so excluding
+ * pending meant the customer saw no booked event at all in the window between
+ * their own payment and the organizer getting around to confirming.
+ *
+ * `status` travels with it so the badge and the copy can be honest about which
+ * of those three it is, rather than implying the organizer has confirmed.
+ */
 export interface ActiveBookingView {
   id: string;
   ref: string;
@@ -25,6 +47,10 @@ export interface ActiveBookingView {
   description: string;
   progress: number;
   daysToGo: number;
+  status: BookingStatus;
+  /** Whether the organizer has confirmed — drives the card's sub-line. */
+  organizerConfirmed: boolean;
+  organizerName: string;
   steps: { label: string; done: boolean }[];
 }
 
@@ -38,8 +64,22 @@ export interface BookingOrganizerRef {
   rating: number;
 }
 
-/** Latest live booking summary consumed by the Home "Current Event" resolver. */
-export interface LatestBookingSummary extends ActiveBookingView {
+/**
+ * Latest live booking summary consumed by the Home "Current Event" resolver.
+ *
+ * Deliberately no longer extends ActiveBookingView: that shape is now composed
+ * for the booked card specifically (derived title, status-aware copy, computed
+ * milestones), while this one reports the booking's own stored fields. Sharing a
+ * base type meant a change made for one silently altered the other.
+ */
+export interface LatestBookingSummary {
+  id: string;
+  ref: string;
+  title: string;
+  description: string;
+  progress: number;
+  daysToGo: number;
+  steps: { label: string; done: boolean }[];
   status: BookingStatus;
   organizer: BookingOrganizerRef | null;
   createdAt: Date | undefined;
@@ -66,8 +106,15 @@ export class BookingService {
 
   constructor(
     @InjectModel(Booking.name) private readonly bookingModel: Model<BookingDocument>,
+    /*
+     * The invitation model, not InvitationModule: the invitation service already
+     * depends on the booking schema, so importing the module here would be a
+     * cycle. Only the approval status is read, and only for the home card.
+     */
+    @InjectModel(Invitation.name) private readonly invitationModel: Model<InvitationDocument>,
     private readonly quoteService: QuoteService,
     private readonly organizerService: OrganizerService,
+    private readonly subvendorService: SubvendorService,
     private readonly notificationService: NotificationService,
   ) {}
 
@@ -126,6 +173,21 @@ export class BookingService {
     }
   }
 
+  /** Notify the sub-vendor's owning user (if the profile still exists). */
+  private async notifySubVendor(
+    subVendorId: Types.ObjectId | undefined,
+    title: string,
+    body: string,
+  ): Promise<void> {
+    if (!subVendorId) return;
+    try {
+      const profile = await this.subvendorService.findById(subVendorId.toString());
+      await this.notifyUser(profile.user, title, body, '/subvendor/home');
+    } catch (err) {
+      this.logger.warn(`Sub-vendor task notification failed: ${String(err)}`);
+    }
+  }
+
   private detailView(b: BookingDocument): Record<string, unknown> {
     const org = b.organizer as unknown as Record<string, unknown> | undefined;
     const organizer =
@@ -138,6 +200,11 @@ export class BookingService {
             tier: org.tier,
             rating: org.rating,
           }
+        : null;
+    const cust = b.customer as unknown as Record<string, unknown> | undefined;
+    const customer =
+      cust && typeof cust === 'object' && 'name' in cust
+        ? { id: (cust._id as Types.ObjectId).toString(), name: cust.name }
         : null;
     const advanceAmount = Math.round(b.amount * 0.3);
     return {
@@ -154,33 +221,149 @@ export class BookingService {
       balanceAmount: b.amount - advanceAmount,
       progress: b.progress,
       steps: b.steps,
+      tasks: b.tasks.map((t) => ({
+        id: (t as unknown as { _id: Types.ObjectId })._id.toString(),
+        title: t.title,
+        status: t.status,
+        assigneeName: t.assigneeName,
+        subVendorId: t.subVendorId ? t.subVendorId.toString() : null,
+        assignmentStatus: t.assignmentStatus,
+        amount: t.amount,
+        dueDate: t.dueDate ?? null,
+        photoProof: t.photoProof,
+      })),
       timeline: b.timeline,
       status: b.status,
       organizer,
+      customer,
       quotationId: b.quotation ? b.quotation.toString() : null,
       createdAt: b.createdAt,
       updatedAt: b.updatedAt,
     };
   }
 
+  private async organizerProfileId(userId: string): Promise<Types.ObjectId> {
+    const profile = await this.organizerService.findByUser(userId);
+    if (!profile) {
+      throw new ForbiddenException('No organizer profile is linked to your account');
+    }
+    return profile._id;
+  }
+
   // ---------------------------------------------------------------------------
-  // Home card (reused by the home module) — ongoing booking only
+  // Home card (reused by the home module) — the customer's live booking
   // ---------------------------------------------------------------------------
+
+  /** Statuses a customer would call "my booked event". */
+  private static readonly LIVE_BOOKING_STATUSES = [
+    BookingStatus.PENDING,
+    BookingStatus.CONFIRMED,
+    BookingStatus.IN_PROGRESS,
+  ];
+
+  /** "28 Dec 2026" — the event date as the card titles it. */
+  private static dateLabel(d: Date | undefined): string {
+    if (!d) return '';
+    const t = new Date(d);
+    if (Number.isNaN(t.getTime())) return '';
+    return t.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+
+  /**
+   * The four milestones the home card shows, each resolved from real state — no
+   * placeholder ticks:
+   *
+   *   Organizer booked   the booking exists at all (the customer chose and paid)
+   *   Vendors locked     organizer confirmed AND every sub-vendor they assigned
+   *                      has accepted (an assignment still pending is not locked)
+   *   Invitation         the guest invitation has been approved by the customer
+   *   Final walkthrough  delivery has started, i.e. the event is under way
+   */
+  private bookedMilestones(
+    booking: BookingDocument,
+    invitationApproved: boolean,
+  ): { label: string; done: boolean }[] {
+    const confirmed =
+      booking.status === BookingStatus.CONFIRMED ||
+      booking.status === BookingStatus.IN_PROGRESS ||
+      booking.status === BookingStatus.COMPLETED;
+    const assigned = (booking.tasks ?? []).filter((t) => t.subVendorId);
+    const vendorsLocked =
+      confirmed &&
+      assigned.length > 0 &&
+      assigned.every((t) => t.assignmentStatus === TaskAssignmentStatus.ACCEPTED);
+    const underway =
+      booking.status === BookingStatus.IN_PROGRESS || booking.status === BookingStatus.COMPLETED;
+
+    return [
+      { label: 'Organizer booked', done: true },
+      { label: 'Vendors locked', done: vendorsLocked },
+      { label: 'Invitation', done: invitationApproved },
+      { label: 'Final walkthrough', done: underway },
+    ];
+  }
 
   async getActiveForUser(userId: string): Promise<ActiveBookingView | null> {
     const booking = await this.bookingModel
-      .findOne({ customer: new Types.ObjectId(userId), status: { $in: ONGOING_BOOKING_STATUSES } })
+      .findOne({
+        customer: new Types.ObjectId(userId),
+        status: { $in: BookingService.LIVE_BOOKING_STATUSES },
+      })
+      .populate('organizer', 'name')
       .sort({ createdAt: -1 })
       .exec();
     if (!booking) return null;
+
+    const org = booking.organizer as unknown as { name?: string } | null;
+    const organizerName =
+      org && typeof org === 'object' && typeof org.name === 'string' && org.name.trim()
+        ? org.name.trim()
+        : 'Your organizer';
+
+    const invitation = await this.invitationModel
+      .findOne({ booking: booking._id }, { status: 1 })
+      .lean()
+      .exec();
+    // Compared against the enum rather than a bare string: this is the only
+    // read of invitation status outside the invitation module, so a rename
+    // there should fail the build here instead of silently never ticking.
+    const invitationApproved = invitation?.status === InvitationStatus.APPROVED;
+
+    const steps = this.bookedMilestones(booking, invitationApproved);
+    const confirmed = booking.status !== BookingStatus.PENDING;
+
+    const occasion = (booking.occasion ?? '').trim();
+    const date = BookingService.dateLabel(booking.eventDate);
+    const title = [`Your ${occasion || 'event'}`, date].filter(Boolean).join(' · ');
+
+    /*
+     * The sub-line says who is running the event and what is outstanding. Until
+     * the organizer confirms, saying they are "managing every vendor" would be
+     * untrue — the booking is paid for but not yet accepted on their side.
+     */
+    const description = !confirmed
+      ? `${organizerName} has your booking and will confirm it shortly. Review the plan and track progress in one workspace.`
+      : booking.status === BookingStatus.IN_PROGRESS
+        ? `${organizerName} is running your event today. Follow the timeline and approvals in one workspace.`
+        : `${organizerName} is managing every vendor. Review the plan, approve your invitation, and track progress — all in one workspace.`;
+
     return {
       id: booking._id.toString(),
       ref: booking.ref,
-      title: booking.title,
-      description: booking.description,
-      progress: booking.progress,
+      title,
+      description,
+      /*
+       * Derived from the milestones above rather than the status-stepped
+       * `booking.progress`, so the ring and the ticks under it can never
+       * disagree — a card reading "82% ready" with nothing ticked is a bug the
+       * customer can see.
+       */
+      progress: Math.round((steps.filter((s) => s.done).length / steps.length) * 100),
       daysToGo: this.daysUntil(booking.eventDate),
-      steps: booking.steps,
+      status: booking.status,
+      organizerConfirmed: confirmed,
+      organizerName,
+      steps,
     };
   }
 
@@ -319,9 +502,20 @@ export class BookingService {
     return this.detailView(populated);
   }
 
+  /**
+   * `when` is whatever the customer typed/picked on the request — the real
+   * Plan wizard sends a full date (e.g. "2026-12-20"), while older/seed data
+   * used a bare day-month label (e.g. "28 Dec"). Try the full date first,
+   * then fall back to appending the current year for the short form.
+   */
   private deriveEventDate(when: string): Date {
-    const parsed = when ? new Date(`${when} ${new Date().getFullYear()}`) : new Date(NaN);
-    if (!Number.isNaN(parsed.getTime()) && parsed.getTime() > Date.now()) return parsed;
+    if (when) {
+      const direct = new Date(when);
+      if (!Number.isNaN(direct.getTime()) && direct.getTime() > Date.now()) return direct;
+
+      const withYear = new Date(`${when} ${new Date().getFullYear()}`);
+      if (!Number.isNaN(withYear.getTime()) && withYear.getTime() > Date.now()) return withYear;
+    }
     // Fallback: 30 days out, so daysToGo is sensible when 'when' isn't parseable.
     return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   }
@@ -334,6 +528,652 @@ export class BookingService {
       .sort({ createdAt: -1 })
       .exec();
     return bookings.map((b) => this.detailView(b));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Organizer — read / execution board / dashboard / calendar
+  // ---------------------------------------------------------------------------
+
+  /** All bookings for the organizer's own profile, newest event first. */
+  async findForOrganizer(userId: string): Promise<Record<string, unknown>[]> {
+    const profileId = await this.organizerProfileId(userId);
+    const bookings = await this.bookingModel
+      .find({ organizer: profileId })
+      .populate('customer', 'name')
+      .sort({ eventDate: 1 })
+      .exec();
+    return bookings.map((b) => this.detailView(b));
+  }
+
+  /** Home dashboard: real stats + today's tasks + the week ahead + new enquiries. */
+  async getDashboard(userId: string): Promise<Record<string, unknown>> {
+    const profileId = await this.organizerProfileId(userId);
+    const [profile, bookings, incoming] = await Promise.all([
+      this.organizerService.findById(profileId.toString()),
+      this.bookingModel.find({ organizer: profileId }).populate('customer', 'name').exec(),
+      this.quoteService.listIncoming(userId),
+    ]);
+
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const in7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
+
+    const activeBookings = bookings.filter((b) =>
+      (ONGOING_BOOKING_STATUSES as BookingStatus[]).includes(b.status),
+    );
+    const earningsBetween = (start: Date, end: Date): number =>
+      bookings
+        .filter(
+          (b) =>
+            b.status !== BookingStatus.CANCELLED &&
+            b.status !== BookingStatus.REJECTED &&
+            b.createdAt &&
+            b.createdAt >= start &&
+            b.createdAt < end,
+        )
+        .reduce((sum, b) => sum + b.amount, 0);
+
+    // Bucketed by when the booking was made (createdAt), not the event date —
+    // events are often booked months ahead, so an eventDate-based "this
+    // month" would rarely match the deal actually closing this month.
+    const monthEarnings = earningsBetween(monthStart, nextMonthStart);
+    const lastMonthEarnings = earningsBetween(lastMonthStart, monthStart);
+    const monthEarningsChangePercent =
+      lastMonthEarnings > 0
+        ? Math.round(((monthEarnings - lastMonthEarnings) / lastMonthEarnings) * 100)
+        : null;
+
+    const todaysTasks = bookings.flatMap((b) =>
+      b.tasks
+        .filter((t) => t.dueDate && t.dueDate >= startOfToday && t.dueDate < endOfToday)
+        .map((t) => ({
+          id: (t as unknown as { _id: Types.ObjectId })._id.toString(),
+          bookingId: b._id.toString(),
+          title: t.title,
+          status: t.status,
+        })),
+    );
+
+    const next7Days = bookings
+      .filter(
+        (b) =>
+          b.eventDate >= startOfToday &&
+          b.eventDate <= in7Days &&
+          b.status !== BookingStatus.CANCELLED &&
+          b.status !== BookingStatus.REJECTED,
+      )
+      .map((b) => {
+        const cust = b.customer as unknown as Record<string, unknown> | undefined;
+        return {
+          id: b._id.toString(),
+          eventDate: b.eventDate,
+          title: b.title,
+          customerName: cust && 'name' in cust ? String(cust.name ?? '') : '',
+        };
+      });
+
+    const pendingEnquiries = incoming
+      .filter(
+        (r) =>
+          !r.myQuotation &&
+          r.status !== QuoteRequestStatus.CANCELLED &&
+          r.status !== QuoteRequestStatus.CLOSED,
+      )
+      .slice(0, 5);
+
+    return {
+      newEnquiries: pendingEnquiries.length,
+      activeBookings: activeBookings.length,
+      monthEarnings,
+      monthEarningsChangePercent,
+      avgRating: profile.rating,
+      todaysTasks,
+      next7Days,
+      pendingEnquiries,
+    };
+  }
+
+  /** Bookings + blocked dates for the calendar, this organizer's own view. */
+  async getCalendar(userId: string): Promise<Record<string, unknown>> {
+    const profileId = await this.organizerProfileId(userId);
+    const [profile, bookings] = await Promise.all([
+      this.organizerService.findById(profileId.toString()),
+      this.bookingModel
+        .find({
+          organizer: profileId,
+          status: { $nin: [BookingStatus.CANCELLED, BookingStatus.REJECTED] },
+        })
+        .populate('customer', 'name')
+        .exec(),
+    ]);
+
+    const bookedDates = bookings.map((b) => {
+      const cust = b.customer as unknown as Record<string, unknown> | undefined;
+      return {
+        date: b.eventDate,
+        bookingId: b._id.toString(),
+        title: b.title,
+        customerName: cust && 'name' in cust ? String(cust.name ?? '') : '',
+        // Venue, so the calendar's day panel can say where the event is
+        // without refetching the whole booking.
+        location: b.location,
+        amount: b.amount,
+        status: b.status,
+      };
+    });
+
+    return {
+      bookedDates,
+      blockedDates: profile.busyDates,
+    };
+  }
+
+  /** Organizer's sub-vendor list enriched with real per-organizer task stats. */
+  async getSubVendorsForOrganizer(userId: string): Promise<Record<string, unknown>[]> {
+    const orgId = await this.organizerProfileId(userId);
+    const links = await this.subvendorService.listForOrganizer(userId);
+    const svIds = links
+      .map((l) => (l as { subVendor: { id: string } | null }).subVendor?.id)
+      .filter((id): id is string => !!id)
+      .map((id) => new Types.ObjectId(id));
+    if (!svIds.length) return links.map((l) => ({ ...l, eventsCount: 0, performancePercent: 0 }));
+
+    const bookings = await this.bookingModel
+      .find({ organizer: orgId, 'tasks.subVendorId': { $in: svIds } })
+      .exec();
+
+    const statsBySv = new Map<string, { accepted: number; done: number }>();
+    bookings.forEach((b) => {
+      b.tasks.forEach((t) => {
+        if (!t.subVendorId || t.assignmentStatus !== TaskAssignmentStatus.ACCEPTED) return;
+        const key = t.subVendorId.toString();
+        const entry = statsBySv.get(key) ?? { accepted: 0, done: 0 };
+        entry.accepted += 1;
+        if (t.status === BookingTaskStatus.DONE) entry.done += 1;
+        statsBySv.set(key, entry);
+      });
+    });
+
+    return links.map((l) => {
+      const svId = (l as { subVendor: { id: string } | null }).subVendor?.id;
+      const stats = svId ? statsBySv.get(svId) : undefined;
+      return {
+        ...l,
+        eventsCount: stats?.done ?? 0,
+        performancePercent:
+          stats && stats.accepted ? Math.round((stats.done / stats.accepted) * 100) : 0,
+      };
+    });
+  }
+
+  /** Toggle a manually-blocked date on the organizer's own calendar. */
+  async setDateBlocked(userId: string, date: Date, blocked: boolean): Promise<string[]> {
+    const profileId = await this.organizerProfileId(userId);
+    const profile = await this.organizerService.findById(profileId.toString());
+    const day = date.toISOString().slice(0, 10);
+    const already = (profile.busyDates ?? []).some(
+      (d) => new Date(d).toISOString().slice(0, 10) === day,
+    );
+
+    if (blocked && !already) {
+      profile.busyDates = [...(profile.busyDates ?? []), date];
+    } else if (!blocked && already) {
+      profile.busyDates = (profile.busyDates ?? []).filter(
+        (d) => new Date(d).toISOString().slice(0, 10) !== day,
+      );
+    }
+    await profile.save();
+    return profile.busyDates.map((d) => new Date(d).toISOString().slice(0, 10));
+  }
+
+  /**
+   * Badges & tiers — live-computed from real bookings/profile data (events
+   * count is *always* counted fresh here rather than trusting a stored
+   * counter, since nothing else in the codebase increments one). Auto-
+   * promotes the stored tier when requirements are newly met, so the
+   * (already customer-facing) tier badge reflects real progress.
+   */
+  async getBadgeStatus(userId: string): Promise<Record<string, unknown>> {
+    const profileId = await this.organizerProfileId(userId);
+    const profile = await this.organizerService.findById(profileId.toString());
+    const events = await this.bookingModel.countDocuments({
+      organizer: profileId,
+      status: BookingStatus.COMPLETED,
+    });
+
+    const stats = {
+      events,
+      avgRating: profile.rating,
+      trainingStage: profile.trainingStage,
+      complaints: profile.complaintsCount,
+    };
+    const earned = computeEarnedTier(stats);
+    if (TIER_ORDER.indexOf(earned) > TIER_ORDER.indexOf(profile.tier)) {
+      profile.tier = earned;
+      await profile.save();
+    }
+
+    const current = TIER_CONFIG[profile.tier];
+    const next = current.next ? TIER_CONFIG[current.next] : null;
+
+    return {
+      currentTier: profile.tier,
+      commissionRate: current.commissionRate,
+      events,
+      avgRating: profile.rating,
+      trainingStage: profile.trainingStage,
+      complaintsCount: profile.complaintsCount,
+      nextTier: next?.tier ?? null,
+      nextRequirements: next?.requirements ?? null,
+      tierLadder: TIER_ORDER.map((t) => ({
+        tier: t,
+        commissionRate: TIER_CONFIG[t].commissionRate,
+      })),
+    };
+  }
+
+  /** Earnings dashboard — totals, monthly trend, event mix, and a transaction ledger. */
+  async getEarnings(userId: string): Promise<Record<string, unknown>> {
+    const profileId = await this.organizerProfileId(userId);
+    const [profile, bookings] = await Promise.all([
+      this.organizerService.findById(profileId.toString()),
+      this.bookingModel
+        .find({
+          organizer: profileId,
+          status: {
+            $in: [BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS, BookingStatus.COMPLETED],
+          },
+        })
+        .populate('customer', 'name')
+        .sort({ eventDate: -1 })
+        .exec(),
+    ]);
+
+    const rate = TIER_CONFIG[profile.tier].commissionRate;
+    const totalEarned = bookings.reduce((sum, b) => sum + b.amount, 0);
+    const commission = Math.round(totalEarned * rate);
+    const netPayout = totalEarned - commission;
+    const paidNet = bookings
+      .filter((b) => b.status === BookingStatus.COMPLETED)
+      .reduce((sum, b) => sum + Math.round(b.amount * (1 - rate)), 0);
+    const pendingPayout = netPayout - paidNet;
+
+    // Monthly trend: this month and the 5 before it.
+    const now = new Date();
+    const months = Array.from({ length: 6 }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+      return { year: d.getFullYear(), month: d.getMonth() };
+    });
+    // Bucketed by createdAt (when the deal closed) — see monthEarnings note
+    // in getDashboard for why eventDate would misrepresent the trend.
+    const monthlyEarnings = months.map(({ year, month }) => {
+      const start = new Date(year, month, 1);
+      const end = new Date(year, month + 1, 1);
+      const total = bookings
+        .filter((b) => b.createdAt && b.createdAt >= start && b.createdAt < end)
+        .reduce((sum, b) => sum + b.amount, 0);
+      return { label: start.toLocaleDateString('en-GB', { month: 'short' }), amount: total };
+    });
+
+    // Event mix by occasion, % of booking count.
+    const mixCounts = new Map<string, number>();
+    bookings.forEach((b) => {
+      const key = b.occasion || 'Other';
+      mixCounts.set(key, (mixCounts.get(key) ?? 0) + 1);
+    });
+    const eventMix = Array.from(mixCounts.entries()).map(([occasion, count]) => ({
+      occasion,
+      percent: bookings.length ? Math.round((count / bookings.length) * 100) : 0,
+    }));
+
+    const transactions = bookings.map((b) => {
+      const cust = b.customer as unknown as Record<string, unknown> | undefined;
+      const net = Math.round(b.amount * (1 - rate));
+      return {
+        id: b._id.toString(),
+        ref: b.ref,
+        customerName: cust && 'name' in cust ? String(cust.name ?? '') : '',
+        eventDate: b.eventDate,
+        amount: b.amount,
+        commission: b.amount - net,
+        net,
+        payoutStatus: b.status === BookingStatus.COMPLETED ? 'paid' : 'pending',
+      };
+    });
+
+    return {
+      totalEarned,
+      commission,
+      netPayout,
+      pendingPayout,
+      commissionRate: rate,
+      monthlyEarnings,
+      eventMix,
+      transactions,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Organizer — execution tasks
+  // ---------------------------------------------------------------------------
+
+  private async loadOwnedBooking(userId: string, bookingId: string): Promise<BookingDocument> {
+    const profileId = await this.organizerProfileId(userId);
+    const booking = await this.bookingModel
+      .findOne({ _id: this.toObjectId(bookingId), organizer: profileId })
+      .exec();
+    if (!booking) throw new NotFoundException('Booking not found');
+    return booking;
+  }
+
+  async addTask(
+    userId: string,
+    bookingId: string,
+    dto: CreateBookingTaskDto,
+  ): Promise<Record<string, unknown>> {
+    const profileId = await this.organizerProfileId(userId);
+    const booking = await this.loadOwnedBooking(userId, bookingId);
+
+    let assigneeName = dto.assigneeName ?? '';
+    let subVendorId: Types.ObjectId | undefined;
+    let assignmentStatus = TaskAssignmentStatus.UNASSIGNED;
+    if (dto.subVendorId) {
+      const sv = await this.subvendorService.assertLinked(profileId, dto.subVendorId);
+      subVendorId = sv._id;
+      assigneeName = sv.fullName;
+      assignmentStatus = TaskAssignmentStatus.PENDING;
+    }
+
+    booking.tasks.push({
+      title: dto.title,
+      status: BookingTaskStatus.TODO,
+      assigneeName,
+      subVendorId,
+      assignmentStatus,
+      amount: dto.amount ?? 0,
+      dueDate: dto.dueDate,
+      photoProof: null,
+    } as BookingDocument['tasks'][number]);
+    await booking.save();
+
+    if (subVendorId) {
+      await this.notifySubVendor(
+        subVendorId,
+        'New task from an organizer',
+        `You've been assigned "${dto.title}" for ${booking.title}. Accept or decline it.`,
+      );
+    }
+    return this.detailView(booking);
+  }
+
+  async updateTask(
+    userId: string,
+    bookingId: string,
+    taskId: string,
+    dto: UpdateBookingTaskDto,
+  ): Promise<Record<string, unknown>> {
+    const profileId = await this.organizerProfileId(userId);
+    const booking = await this.loadOwnedBooking(userId, bookingId);
+    const task = booking.tasks.find(
+      (t) => (t as unknown as { _id: Types.ObjectId })._id.toString() === taskId,
+    );
+    if (!task) throw new NotFoundException('Task not found');
+    if (dto.title !== undefined) task.title = dto.title;
+    if (dto.status !== undefined) task.status = dto.status;
+    if (dto.dueDate !== undefined) task.dueDate = dto.dueDate;
+    if (dto.amount !== undefined) task.amount = dto.amount;
+    if (dto.photoProof !== undefined) {
+      task.photoProof = {
+        url: dto.photoProof.url,
+        key: dto.photoProof.key,
+        originalName: dto.photoProof.originalName ?? '',
+      };
+    }
+
+    let newlyAssigned: Types.ObjectId | undefined;
+    if (dto.subVendorId !== undefined) {
+      if (dto.subVendorId === null) {
+        task.subVendorId = undefined;
+        task.assignmentStatus = TaskAssignmentStatus.UNASSIGNED;
+        if (dto.assigneeName === undefined) task.assigneeName = '';
+      } else {
+        const sv = await this.subvendorService.assertLinked(profileId, dto.subVendorId);
+        task.subVendorId = sv._id;
+        task.assigneeName = sv.fullName;
+        task.assignmentStatus = TaskAssignmentStatus.PENDING;
+        newlyAssigned = sv._id;
+      }
+    } else if (dto.assigneeName !== undefined) {
+      task.assigneeName = dto.assigneeName;
+    }
+
+    await booking.save();
+
+    if (newlyAssigned) {
+      await this.notifySubVendor(
+        newlyAssigned,
+        'New task from an organizer',
+        `You've been assigned "${task.title}" for ${booking.title}. Accept or decline it.`,
+      );
+    }
+    return this.detailView(booking);
+  }
+
+  async removeTask(
+    userId: string,
+    bookingId: string,
+    taskId: string,
+  ): Promise<Record<string, unknown>> {
+    const booking = await this.loadOwnedBooking(userId, bookingId);
+    booking.tasks = booking.tasks.filter(
+      (t) => (t as unknown as { _id: Types.ObjectId })._id.toString() !== taskId,
+    ) as BookingDocument['tasks'];
+    await booking.save();
+    return this.detailView(booking);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sub-vendor — my tasks / accept-decline / status updates
+  // ---------------------------------------------------------------------------
+
+  private async subVendorProfileId(userId: string): Promise<Types.ObjectId> {
+    const profile = await this.subvendorService.findByUser(userId);
+    if (!profile) throw new ForbiddenException('No sub-vendor profile is linked to your account');
+    return profile._id;
+  }
+
+  /** Every task across all bookings assigned to this sub-vendor. */
+  async findTasksForSubVendor(userId: string): Promise<Record<string, unknown>[]> {
+    const svId = await this.subVendorProfileId(userId);
+    const bookings = await this.bookingModel
+      .find({ 'tasks.subVendorId': svId })
+      .populate('organizer', 'name initials avatarColor')
+      .exec();
+
+    return bookings.flatMap((b) => {
+      const org = b.organizer as unknown as Record<string, unknown> | undefined;
+      const organizer =
+        org && typeof org === 'object' && 'name' in org
+          ? {
+              id: (org._id as Types.ObjectId).toString(),
+              name: String(org.name ?? ''),
+              initials: String(org.initials ?? ''),
+              avatarColor: String(org.avatarColor ?? ''),
+            }
+          : null;
+      return b.tasks
+        .filter((t) => t.subVendorId && t.subVendorId.toString() === svId.toString())
+        .map((t) => ({
+          id: (t as unknown as { _id: Types.ObjectId })._id.toString(),
+          bookingId: b._id.toString(),
+          bookingRef: b.ref,
+          bookingTitle: b.title,
+          eventDate: b.eventDate,
+          location: b.location,
+          organizer,
+          title: t.title,
+          status: t.status,
+          assignmentStatus: t.assignmentStatus,
+          amount: t.amount,
+          dueDate: t.dueDate ?? null,
+          photoProof: t.photoProof,
+        }));
+    });
+  }
+
+  private findOwnTask(
+    booking: BookingDocument,
+    taskId: string,
+    svId: Types.ObjectId,
+  ): BookingDocument['tasks'][number] {
+    const task = booking.tasks.find(
+      (t) =>
+        (t as unknown as { _id: Types.ObjectId })._id.toString() === taskId &&
+        t.subVendorId &&
+        t.subVendorId.toString() === svId.toString(),
+    );
+    if (!task) throw new NotFoundException('Task not found');
+    return task;
+  }
+
+  /** Sub-vendor accepts or declines a pending task assignment. */
+  async respondToTaskAssignment(
+    userId: string,
+    bookingId: string,
+    taskId: string,
+    accept: boolean,
+  ): Promise<Record<string, unknown>> {
+    const svId = await this.subVendorProfileId(userId);
+    const booking = await this.bookingModel.findById(this.toObjectId(bookingId)).exec();
+    if (!booking) throw new NotFoundException('Booking not found');
+    const task = this.findOwnTask(booking, taskId, svId);
+
+    task.assignmentStatus = accept ? TaskAssignmentStatus.ACCEPTED : TaskAssignmentStatus.DECLINED;
+    await booking.save();
+
+    await this.notifyOrganizer(
+      booking.organizer,
+      accept ? 'Sub-vendor accepted a task' : 'Sub-vendor declined a task',
+      `${task.assigneeName} ${accept ? 'accepted' : 'declined'} "${task.title}" for ${booking.title}.`,
+    );
+    return this.detailView(booking);
+  }
+
+  /** Performance & payments (P-14) — real, derived from this sub-vendor's own task history. */
+  async getSubVendorPerformance(userId: string): Promise<Record<string, unknown>> {
+    const svId = await this.subVendorProfileId(userId);
+    const bookings = await this.bookingModel
+      .find({ 'tasks.subVendorId': svId })
+      .populate('organizer', 'name')
+      .exec();
+
+    const accepted = bookings.flatMap((b) =>
+      b.tasks
+        .filter((t) => t.subVendorId?.toString() === svId.toString())
+        .filter((t) => t.assignmentStatus === TaskAssignmentStatus.ACCEPTED)
+        .map((t) => ({ task: t, booking: b })),
+    );
+    const done = accepted.filter((a) => a.task.status === BookingTaskStatus.DONE);
+    const doneWithDueDate = done.filter((a) => a.task.dueDate);
+    const onTime = doneWithDueDate.filter(
+      (a) => a.task.updatedAt && a.task.dueDate && a.task.updatedAt <= a.task.dueDate,
+    );
+
+    const onTimeRate = doneWithDueDate.length
+      ? (onTime.length / doneWithDueDate.length) * 100
+      : 100;
+    const completionRate = accepted.length ? (done.length / accepted.length) * 100 : 0;
+    const photoProofRate = done.length
+      ? (done.filter((a) => a.task.photoProof).length / done.length) * 100
+      : 0;
+    const avgRating = await this.subvendorService.avgRating(svId);
+    const ratingPercent = avgRating * 20;
+    const performanceScore = Math.round(
+      (onTimeRate + completionRate + photoProofRate + ratingPercent) / 4,
+    );
+
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+
+    const payments = accepted
+      .filter((a) => a.task.amount > 0)
+      .map((a) => {
+        const org = a.booking.organizer as unknown as Record<string, unknown> | undefined;
+        const status =
+          a.task.status !== BookingTaskStatus.DONE
+            ? 'pending'
+            : a.booking.status === BookingStatus.COMPLETED
+              ? 'paid'
+              : 'processing';
+        return {
+          bookingId: a.booking._id.toString(),
+          taskId: (a.task as unknown as { _id: Types.ObjectId })._id.toString(),
+          event: a.booking.title,
+          organizerName: org && 'name' in org ? String(org.name ?? '') : '',
+          amount: a.task.amount,
+          status,
+          eventDate: a.booking.eventDate,
+        };
+      });
+
+    const lifetimeEarned = payments.reduce((sum, p) => sum + p.amount, 0);
+    const pendingPayout = payments
+      .filter((p) => p.status !== 'paid')
+      .reduce((sum, p) => sum + p.amount, 0);
+    // Bucketed by when the task was assigned (createdAt) — see monthEarnings
+    // note above for why the event date would misrepresent "this month".
+    const thisMonthEarned = accepted
+      .filter(
+        (a) =>
+          a.task.createdAt && a.task.createdAt >= monthStart && a.task.createdAt < nextMonthStart,
+      )
+      .reduce((sum, a) => sum + a.task.amount, 0);
+
+    return {
+      performanceScore,
+      scoreBreakdown: {
+        onTimeDeliveryRate: Math.round(onTimeRate),
+        taskCompletionRate: Math.round(completionRate),
+        photoProofSubmissionRate: Math.round(photoProofRate),
+        avgOrganizerRating: Math.round(ratingPercent),
+      },
+      thisMonthEarned,
+      pendingPayout,
+      lifetimeEarned,
+      payments: payments.sort((a, b) => b.eventDate.getTime() - a.eventDate.getTime()),
+    };
+  }
+
+  /** Sub-vendor updates their own accepted task's status / photo proof. */
+  async updateTaskAsSubVendor(
+    userId: string,
+    bookingId: string,
+    taskId: string,
+    dto: Pick<UpdateBookingTaskDto, 'status' | 'photoProof'>,
+  ): Promise<Record<string, unknown>> {
+    const svId = await this.subVendorProfileId(userId);
+    const booking = await this.bookingModel.findById(this.toObjectId(bookingId)).exec();
+    if (!booking) throw new NotFoundException('Booking not found');
+    const task = this.findOwnTask(booking, taskId, svId);
+    if (task.assignmentStatus !== TaskAssignmentStatus.ACCEPTED) {
+      throw new ForbiddenException('Accept this task before updating it');
+    }
+
+    if (dto.status !== undefined) task.status = dto.status;
+    if (dto.photoProof !== undefined) {
+      task.photoProof = {
+        url: dto.photoProof.url,
+        key: dto.photoProof.key,
+        originalName: dto.photoProof.originalName ?? '',
+      };
+    }
+    await booking.save();
+    return this.detailView(booking);
   }
 
   private async loadBooking(id: string): Promise<BookingDocument> {

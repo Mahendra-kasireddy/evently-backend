@@ -16,6 +16,9 @@ export enum UploadPurpose {
   GST = 'gst',
   CANCELLED_CHEQUE = 'cancelledCheque',
   CHAT_ATTACHMENT = 'chatAttachment',
+  TASK_PROOF = 'taskProof',
+  /** Reference photos attached to an idea on a booking's planning board. */
+  IDEA_IMAGE = 'ideaImage',
 }
 
 export interface ImageDimensionRule {
@@ -88,5 +91,16 @@ export const UPLOAD_RULES: Record<UploadPurpose, UploadRule> = {
     maxBytes: 25 * MB,
     mimeTypes: [...IMAGE_MIMES, ...DOC_MIMES, ...VIDEO_MIMES],
     extensions: [...IMAGE_EXTS, ...DOC_EXTS, ...VIDEO_EXTS],
+  },
+  [UploadPurpose.TASK_PROOF]: {
+    maxBytes: 8 * MB,
+    mimeTypes: IMAGE_MIMES,
+    extensions: IMAGE_EXTS,
+  },
+  [UploadPurpose.IDEA_IMAGE]: {
+    maxBytes: 8 * MB,
+    mimeTypes: IMAGE_MIMES,
+    extensions: IMAGE_EXTS,
+    image: { minWidth: 80, minHeight: 80, maxWidth: 6000, maxHeight: 6000 },
   },
 };

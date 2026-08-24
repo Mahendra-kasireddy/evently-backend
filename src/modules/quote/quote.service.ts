@@ -32,6 +32,23 @@ export interface OrganizerRef {
   rating: number;
 }
 
+/**
+ * One organizer's response to a request, as listed on the customer's My Events
+ * screen. Deliberately thin: enough to recognise who replied and what it costs,
+ * without shipping every line item for every quotation on the page. The full
+ * breakdown is loaded by the comparison screen for the one request being opened.
+ */
+export interface QuoteResponseSummary {
+  quotationId: string;
+  status: QuotationStatus;
+  grandTotal: number;
+  /** Payable up front to confirm — computed by the API, never client-side. */
+  advanceAmount: number;
+  siteVisitSuggested: boolean;
+  sentAt: Date | undefined;
+  organizer: OrganizerRef | null;
+}
+
 /** Latest active quote request summary consumed by the Home BFF resolver. */
 export interface LatestQuoteSummary {
   id: string;
@@ -144,6 +161,11 @@ export class QuoteService {
       taxRate: q.taxRate,
       taxAmount: q.taxAmount,
       grandTotal: q.grandTotal,
+      advancePercentage: q.advancePercentage,
+      // Derived server-side so the organizer's builder, the customer's quote
+      // detail and the booking screen can never disagree on the figure.
+      advanceAmount: Math.round((q.grandTotal * q.advancePercentage) / 100),
+      siteVisitSuggested: q.siteVisitSuggested,
       notes: q.notes,
       organizer,
       createdAt: q.createdAt,
@@ -203,6 +225,9 @@ export class QuoteService {
       when: dto.when ?? '',
       where: dto.where ?? '',
       guests: dto.guests ?? '',
+      budget: dto.budget ?? '',
+      categories: dto.categories ?? [],
+      ideas: dto.ideas ?? '',
     });
   }
 
@@ -218,13 +243,16 @@ export class QuoteService {
       when: dto.when ?? '',
       where: dto.where ?? '',
       guests: dto.guests ?? '',
+      budget: dto.budget ?? '',
+      categories: dto.categories ?? [],
+      ideas: dto.ideas ?? '',
     });
     await this.notifyOrganizerProfile(
       dto.organizerId,
       'New quote request',
       `A customer requested a quote for their ${dto.occasion || 'event'}. Review and reply from your dashboard.`,
       NotificationType.QUOTE,
-      '/quotes',
+      '/organizer/quotes',
     );
     return quote;
   }
@@ -248,13 +276,64 @@ export class QuoteService {
   // Customer — viewing / acting on quotes
   // ---------------------------------------------------------------------------
 
-  /** The customer's quote requests, newest first (list + history). */
-  listForUser(userId: string): Promise<QuoteRequestDocument[]> {
-    return this.quoteModel
+  /**
+   * The customer's quote requests, newest first (list + history), each carrying
+   * every live organizer response to it, how many there are, and when the latest
+   * arrived.
+   *
+   * `responses` is what lets My Events answer "who replied to *this* event, and
+   * for how much" on one screen: the customer picks the event first and the
+   * organizers second, rather than landing on a comparison for a request they
+   * did not choose. It is fetched in a single query across all of the customer's
+   * requests and grouped in memory — one round-trip regardless of how many
+   * events they have.
+   *
+   * Drafts and withdrawn quotations are excluded throughout: neither is
+   * something the customer can act on, so neither should be counted or listed.
+   */
+  async listForUser(userId: string): Promise<Record<string, unknown>[]> {
+    const requests = await this.quoteModel
       .find({ customer: new Types.ObjectId(userId) })
       .populate('organizer', ORG_FIELDS)
       .sort({ createdAt: -1 })
       .exec();
+    if (requests.length === 0) return [];
+
+    const quotations = await this.quotationModel
+      .find({
+        request: { $in: requests.map((r) => r._id) },
+        status: { $nin: [QuotationStatus.DRAFT, QuotationStatus.WITHDRAWN] },
+      })
+      .populate('organizer', ORG_FIELDS)
+      // Newest first, matching the order the request timeline reports them in.
+      .sort({ updatedAt: -1 })
+      .exec();
+
+    const byRequest = new Map<string, QuoteResponseSummary[]>();
+    for (const q of quotations) {
+      const key = q.request.toString();
+      const list = byRequest.get(key) ?? [];
+      list.push({
+        quotationId: q._id.toString(),
+        status: q.status,
+        grandTotal: q.grandTotal,
+        advanceAmount: Math.round((q.grandTotal * q.advancePercentage) / 100),
+        siteVisitSuggested: q.siteVisitSuggested,
+        sentAt: q.updatedAt ?? q.createdAt,
+        organizer: toOrganizerRef(q.organizer),
+      });
+      byRequest.set(key, list);
+    }
+
+    return requests.map((r) => {
+      const responses = byRequest.get(r._id.toString()) ?? [];
+      return {
+        ...(r.toJSON() as Record<string, unknown>),
+        responses,
+        quotationCount: responses.length,
+        lastQuotedAt: responses[0]?.sentAt ?? null,
+      };
+    });
   }
 
   /**
@@ -279,12 +358,12 @@ export class QuoteService {
       .exec();
     if (!request) return null;
 
-    // Live quotes: exclude withdrawn ones so the count matches what the customer
-    // can actually act on.
+    // Live quotes: exclude withdrawn ones (and organizers' unsent drafts) so
+    // the count matches what the customer can actually act on.
     const quotations = await this.quotationModel
       .find({
         request: request._id,
-        status: { $ne: QuotationStatus.WITHDRAWN },
+        status: { $nin: [QuotationStatus.WITHDRAWN, QuotationStatus.DRAFT] },
       })
       .populate('organizer', ORG_FIELDS)
       .exec();
@@ -316,7 +395,8 @@ export class QuoteService {
   async getRequest(userId: string, requestId: string): Promise<Record<string, unknown>> {
     const request = await this.ownedRequest(userId, requestId);
     const quotations = await this.quotationModel
-      .find({ request: request._id })
+      // Drafts are the organizer's private working copy — never surfaced here.
+      .find({ request: request._id, status: { $ne: QuotationStatus.DRAFT } })
       .populate('organizer', ORG_FIELDS)
       .sort({ createdAt: 1 })
       .exec();
@@ -327,6 +407,9 @@ export class QuoteService {
       when: request.when,
       where: request.where,
       guests: request.guests,
+      budget: request.budget,
+      categories: request.categories,
+      ideas: request.ideas,
       status: request.status,
       createdAt: request.createdAt,
       quotations: quotations.map((q) => this.quotationView(q)),
@@ -418,7 +501,7 @@ export class QuoteService {
       'Your quote was accepted 🎉',
       'A customer accepted your quotation. Head to your dashboard to confirm the booking.',
       NotificationType.QUOTE,
-      '/quotes',
+      '/organizer/quotes',
     );
 
     const populated = await q.populate('organizer', ORG_FIELDS);
@@ -440,7 +523,7 @@ export class QuoteService {
       'Quote declined',
       'A customer declined your quotation for now. You can revise and resend if you like.',
       NotificationType.QUOTE,
-      '/quotes',
+      '/organizer/quotes',
     );
 
     const populated = await q.populate('organizer', ORG_FIELDS);
@@ -478,7 +561,7 @@ export class QuoteService {
         'Quote request cancelled',
         `A customer cancelled their ${request.occasion || 'event'} request.`,
         NotificationType.QUOTE,
-        '/quotes',
+        '/organizer/quotes',
       );
     }
 
@@ -497,6 +580,21 @@ export class QuoteService {
     return profile._id;
   }
 
+  /**
+   * Shortens a customer's name for the organizer-facing enquiry list:
+   * `Priya Reddy` → `Priya R.`. An enquiry is pre-engagement — the organizer
+   * has not been hired yet — so this gives them enough to address the customer
+   * personally without the full identity going out to every matched organizer
+   * on an open (broadcast) request.
+   */
+  private shortCustomerName(name?: string | null): string {
+    const parts = (name ?? '').trim().split(/\s+/).filter(Boolean);
+    const first = parts[0];
+    if (!first) return '';
+    const last = parts.length > 1 ? parts[parts.length - 1] : undefined;
+    return last ? `${first} ${last.charAt(0).toUpperCase()}.` : first;
+  }
+
   /** Requests visible to an organizer: targeted at them or open to all. */
   async listIncoming(organizerUserId: string): Promise<Record<string, unknown>[]> {
     const profileId = await this.organizerProfileId(organizerUserId);
@@ -505,6 +603,10 @@ export class QuoteService {
         $or: [{ organizer: profileId }, { organizer: null }],
         status: { $ne: QuoteRequestStatus.CANCELLED },
       })
+      // This list is the organizer's inbox, so it has to say *who* is asking.
+      // Pulling just the name alongside the request avoids N extra round-trips
+      // from the client.
+      .populate<{ customer: { name?: string } }>('customer', 'name')
       .sort({ createdAt: -1 })
       .exec();
 
@@ -513,10 +615,16 @@ export class QuoteService {
 
     return requests.map((r) => ({
       id: r._id.toString(),
+      customerName: this.shortCustomerName(
+        (r.customer as unknown as { name?: string } | null)?.name,
+      ),
       occasion: r.occasion,
       when: r.when,
       where: r.where,
       guests: r.guests,
+      budget: r.budget,
+      categories: r.categories,
+      ideas: r.ideas,
       status: r.status,
       createdAt: r.createdAt,
       myQuotation: byRequest.has(r._id.toString())
@@ -541,6 +649,7 @@ export class QuoteService {
     const taxRate = dto.taxRate ?? 18;
     const lineItems = this.normalizeLines(dto.lineItems);
     const totals = this.computeTotals(lineItems, taxRate);
+    const isDraft = dto.asDraft === true;
 
     const quotation = await this.quotationModel.create({
       request: request._id,
@@ -549,22 +658,30 @@ export class QuoteService {
       lineItems,
       taxRate,
       notes: dto.notes ?? '',
-      status: QuotationStatus.SENT,
+      advancePercentage: dto.advancePercentage ?? 30,
+      siteVisitSuggested: dto.siteVisitSuggested ?? false,
+      status: isDraft ? QuotationStatus.DRAFT : QuotationStatus.SENT,
       ...totals,
     });
 
-    if (request.status === QuoteRequestStatus.OPEN) {
-      request.status = QuoteRequestStatus.QUOTED;
-      await request.save();
-    }
+    // A draft is invisible to the customer, so it must not move the request out
+    // of "open" or trigger a notification.
+    if (!isDraft) {
+      if (request.status === QuoteRequestStatus.OPEN) {
+        request.status = QuoteRequestStatus.QUOTED;
+        await request.save();
+      }
 
-    await this.notify(
-      request.customer,
-      'You have a new quote',
-      `An organizer sent a quotation for your ${request.occasion || 'event'}. Compare it now.`,
-      NotificationType.QUOTE,
-      '/quotes',
-    );
+      // Deep-links to the event inside My Events, so "compare it now" opens the
+      // responses for *this* request rather than the hub's full list.
+      await this.notify(
+        request.customer,
+        'You have a new quote',
+        `An organizer sent a quotation for your ${request.occasion || 'event'}. Compare it now.`,
+        NotificationType.QUOTE,
+        `/workspace/${request._id.toString()}`,
+      );
+    }
 
     const populated = await quotation.populate('organizer', ORG_FIELDS);
     return this.quotationView(populated);
@@ -597,21 +714,45 @@ export class QuoteService {
     if (dto.lineItems) q.lineItems = this.normalizeLines(dto.lineItems);
     if (dto.taxRate !== undefined) q.taxRate = dto.taxRate;
     if (dto.notes !== undefined) q.notes = dto.notes;
+    if (dto.advancePercentage !== undefined) q.advancePercentage = dto.advancePercentage;
+    if (dto.siteVisitSuggested !== undefined) q.siteVisitSuggested = dto.siteVisitSuggested;
 
     const totals = this.computeTotals(q.lineItems, q.taxRate);
     q.subtotal = totals.subtotal;
     q.taxAmount = totals.taxAmount;
     q.grandTotal = totals.grandTotal;
-    q.status = QuotationStatus.UPDATED;
+
+    // Three cases: a draft being saved again (stays a draft, stays silent), a
+    // draft being sent for the first time (becomes SENT and behaves like a new
+    // quote), and a revision of an already-sent quote.
+    const wasDraft = q.status === QuotationStatus.DRAFT;
+    const keepDraft = wasDraft && dto.asDraft !== false;
+    q.status = keepDraft
+      ? QuotationStatus.DRAFT
+      : wasDraft
+        ? QuotationStatus.SENT
+        : QuotationStatus.UPDATED;
     await q.save();
 
-    await this.notify(
-      q.customer,
-      'A quote was updated',
-      'An organizer revised their quotation for your event. Take another look.',
-      NotificationType.QUOTE,
-      '/quotes',
-    );
+    if (!keepDraft) {
+      if (wasDraft) {
+        const request = await this.quoteModel.findById(q.request).exec();
+        if (request && request.status === QuoteRequestStatus.OPEN) {
+          request.status = QuoteRequestStatus.QUOTED;
+          await request.save();
+        }
+      }
+      await this.notify(
+        q.customer,
+        wasDraft ? 'You have a new quote' : 'A quote was updated',
+        wasDraft
+          ? 'An organizer sent a quotation for your event. Compare it now.'
+          : 'An organizer revised their quotation for your event. Take another look.',
+        NotificationType.QUOTE,
+        // Straight to this response inside My Events.
+        `/workspace/${q.request.toString()}/${q._id.toString()}`,
+      );
+    }
 
     const populated = await q.populate('organizer', ORG_FIELDS);
     return this.quotationView(populated);
@@ -634,7 +775,8 @@ export class QuoteService {
       'A quote was withdrawn',
       'An organizer withdrew their quotation for your event.',
       NotificationType.QUOTE,
-      '/quotes',
+      // The response itself is gone — land on the event, which still exists.
+      `/workspace/${q.request.toString()}`,
     );
 
     const populated = await q.populate('organizer', ORG_FIELDS);

@@ -149,6 +149,19 @@ export class OrganizerProfile {
   active: boolean;
 
   // ===========================================================================
+  // Badges & tiers (Evently Academy training progress feeds this).
+  // ===========================================================================
+
+  // 0 = not started, 1 = Stage 1 (mandatory) complete, up to 3 (Master class).
+  @Prop({ default: 0, min: 0, max: 3 })
+  trainingStage: number;
+
+  // No dispute/complaints system exists yet — always 0 until one does; kept
+  // as a real (if currently constant) field rather than a fabricated number.
+  @Prop({ default: 0, min: 0 })
+  complaintsCount: number;
+
+  // ===========================================================================
   // Onboarding / registration (self-service organizers). Seeded marketing
   // profiles leave these at defaults; self-registered organizers fill them in.
   // ===========================================================================
@@ -322,6 +335,11 @@ export class OrganizerProfile {
   internationalEvents: boolean;
 
   // ---- Step 5: Portfolio ----
+  // Short customer-facing strapline shown under the business name on the
+  // public profile card (e.g. "Capturing your moments, beautifully.").
+  @Prop({ trim: true, default: '', maxlength: 120 })
+  tagline: string;
+
   @Prop({ trim: true, default: '', maxlength: 4000 })
   businessDescription: string;
 

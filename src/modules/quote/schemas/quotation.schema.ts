@@ -6,6 +6,7 @@ export type QuotationDocument = HydratedDocument<Quotation>;
 
 /** Lifecycle of an organizer's priced response to a quote request. */
 export enum QuotationStatus {
+  DRAFT = 'draft', // organizer saved it but hasn't sent it — never visible to the customer
   SENT = 'sent', // organizer submitted the quotation
   UPDATED = 'updated', // organizer revised it
   ACCEPTED = 'accepted', // customer accepted it
@@ -77,6 +78,17 @@ export class Quotation {
 
   @Prop({ trim: true, default: '', maxlength: 2000 })
   notes: string;
+
+  // Share of the grand total the customer pays up front to confirm the booking.
+  // Quoted per-quotation rather than read from the organizer profile, because
+  // organizers routinely vary it by event size.
+  @Prop({ default: 30, min: 0, max: 100 })
+  advancePercentage: number;
+
+  // Organizer flagged this event as warranting an on-site visit before the
+  // final plan is locked; surfaced to the customer alongside the quote.
+  @Prop({ default: false })
+  siteVisitSuggested: boolean;
 
   @Prop({ type: String, enum: QuotationStatus, default: QuotationStatus.SENT, index: true })
   status: QuotationStatus;

@@ -39,6 +39,21 @@ export class QuoteRequest {
   @Prop({ trim: true, default: '' })
   guests: string;
 
+  // The following three are carried over from the Plan wizard's richer draft
+  // (see PlanSubmission) when the request originates there — the Home hero's
+  // quick "Get quotes" draft doesn't collect them, so they stay empty/[] for
+  // that path. Duplicated onto the request itself (not joined) so an
+  // organizer can price a quote without any dependency on the customer's
+  // plan document surviving or changing.
+  @Prop({ trim: true, default: '' })
+  budget: string;
+
+  @Prop({ type: [String], default: [] })
+  categories: string[];
+
+  @Prop({ trim: true, default: '', maxlength: 5000 })
+  ideas: string;
+
   @Prop({ type: String, enum: QuoteRequestStatus, default: QuoteRequestStatus.OPEN, index: true })
   status: QuoteRequestStatus;
 

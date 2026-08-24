@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsNumber,
   IsOptional,
   IsString,
@@ -68,4 +69,23 @@ export class RespondQuotationDto {
   @IsString()
   @MaxLength(2000)
   notes?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  advancePercentage?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  siteVisitSuggested?: boolean;
+
+  /**
+   * `true` parks the quotation as a private draft (the customer never sees it
+   * and gets no notification); `false`/omitted sends it. On update, passing
+   * `false` for a draft is what promotes it to sent.
+   */
+  @IsOptional()
+  @IsBoolean()
+  asDraft?: boolean;
 }

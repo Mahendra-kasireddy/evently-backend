@@ -9,6 +9,17 @@ services:
     init: true
     env_file: .env
     environment:
+      # `environment:` overrides `env_file:`, and that ordering is the point.
+      #
+      # The image sets NODE_ENV=production (Dockerfile:11), but env_file values
+      # override image ENV — so a developer .env carrying NODE_ENV=development
+      # booted the containerised API in development mode. In that mode the app
+      # accepts the fixed OTP master code for any phone number (a full auth
+      # bypass), returns the real OTP in the sendOtp response, reflects any CORS
+      # origin with credentials, and publishes the whole Swagger surface.
+      # Pinning it here means a local .env can no longer do that to a deployed
+      # stack. Override deliberately if you genuinely want a dev container.
+      NODE_ENV: production
       # Point at the compose services instead of localhost.
       # Comment these out to use your Atlas MONGO_URI from .env.
       REDIS_HOST: redis

@@ -167,6 +167,7 @@ export interface OrganizerProfileView {
   destinationEvents: boolean;
   internationalEvents: boolean;
   // Step 5
+  tagline: string;
   businessDescription: string;
   yearsOfExperience: number;
   featuredProjects: string[];
@@ -350,6 +351,7 @@ export class OrganizerOnboardingService {
   async updatePortfolio(userId: string, dto: UpdatePortfolioDto): Promise<OrganizerProfileView> {
     const { profile, user } = await this.load(userId);
 
+    if (dto.tagline !== undefined) profile.tagline = dto.tagline;
     if (dto.businessDescription !== undefined)
       profile.businessDescription = dto.businessDescription;
     if (dto.yearsOfExperience !== undefined) profile.yearsOfExperience = dto.yearsOfExperience;
@@ -431,14 +433,40 @@ export class OrganizerOnboardingService {
 
     profile.onboardingStatus = OnboardingStatus.SUBMITTED;
     profile.submittedAt = new Date();
+    // No admin-review gate exists yet — a submitted, fully-completed profile
+    // goes live immediately so customers can find and request quotes from it.
+    profile.active = true;
     await profile.save();
+    await this.syncUserFromProfile(user, profile);
 
     await this.notify(
       userId,
-      'Profile submitted for verification',
-      'Thanks! Your profile is complete and submitted. Verification is pending — our team typically reviews within 24–48 hours.',
+      'Profile submitted and live',
+      'Thanks! Your profile is complete, submitted, and now visible to customers looking for organizers.',
     );
     return this.toView(profile, user);
+  }
+
+  /**
+   * Copies the organizer's real name/email/city onto their base account. The
+   * base User record is created phone-only at signup (no name/email/city) and
+   * is never populated any other way — every onboarding field before this
+   * point is written only to OrganizerProfile. Best-effort: email has a
+   * unique index, so a collision here shouldn't fail the whole submission.
+   */
+  private async syncUserFromProfile(
+    user: UserDocument,
+    profile: OrganizerProfileDocument,
+  ): Promise<void> {
+    const fullName = `${profile.firstName} ${profile.lastName}`.trim();
+    if (fullName) user.name = fullName;
+    if (profile.contactEmail) user.email = profile.contactEmail;
+    if (profile.city) user.city = profile.city;
+    try {
+      await user.save();
+    } catch (err) {
+      this.logger.warn(`User sync from organizer profile failed: ${String(err)}`);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -616,6 +644,7 @@ export class OrganizerOnboardingService {
       emergencyAvailability: profile.emergencyAvailability,
       destinationEvents: profile.destinationEvents,
       internationalEvents: profile.internationalEvents,
+      tagline: profile.tagline,
       businessDescription: profile.businessDescription,
       yearsOfExperience: profile.yearsOfExperience,
       featuredProjects: profile.featuredProjects ?? [],

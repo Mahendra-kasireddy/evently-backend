@@ -13,11 +13,13 @@ import { Throttle } from '@nestjs/throttler';
 import { OrganizerService } from './organizer.service';
 import { OrganizerConfigService } from './organizer-config.service';
 import { OrganizerOnboardingService } from './organizer-onboarding.service';
+import { AcademyService } from './academy.service';
 import { UpdateOrganizerProfileDto } from './dto/update-organizer-profile.dto';
 import { UpdateVerificationDto } from './dto/update-verification.dto';
 import { UpdateBankDto } from './dto/update-bank.dto';
 import { UpdateServicesDto } from './dto/update-services.dto';
 import { UpdatePortfolioDto } from './dto/update-portfolio.dto';
+import { AcademyKeyDto } from './dto/academy-key.dto';
 import { Public } from '../../common/decorators/public.decorator';
 import { PublicCache } from '../../common/decorators/cache-control.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -28,6 +30,7 @@ export class OrganizerController {
     private readonly organizerService: OrganizerService,
     private readonly configService: OrganizerConfigService,
     private readonly onboardingService: OrganizerOnboardingService,
+    private readonly academyService: AcademyService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -48,7 +51,7 @@ export class OrganizerController {
   @PublicCache(60, 300)
   @Get('getOrganizerById/:id')
   getOrganizerById(@Param('id') id: string) {
-    return this.organizerService.findById(id);
+    return this.organizerService.findPublicById(id);
   }
 
   // ---------------------------------------------------------------------------
@@ -82,10 +85,20 @@ export class OrganizerController {
     return this.onboardingService.register(userId);
   }
 
-  /** The current user's organizer profile (resume draft). */
+  /** The current user's organizer profile (resume draft, or post-approval edit). */
   @Get('profile')
   getProfile(@CurrentUser('userId') userId: string) {
     return this.onboardingService.getProfile(userId);
+  }
+
+  /**
+   * "Live customer preview" for the organizer's own profile screen: the exact
+   * public projection a customer receives, plus `isLive` (false until an admin
+   * approves the profile, since unapproved profiles stay out of discovery).
+   */
+  @Get('profile/preview')
+  getProfilePreview(@CurrentUser('userId') userId: string) {
+    return this.organizerService.previewForOwner(userId);
   }
 
   /** Autosave/update Step-1 (Basic Information) fields. */
@@ -135,5 +148,29 @@ export class OrganizerController {
   @Post('complete-onboarding')
   completeOnboarding(@CurrentUser('userId') userId: string) {
     return this.onboardingService.completeOnboarding(userId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Evently Academy
+  // ---------------------------------------------------------------------------
+
+  @Get('academy')
+  getAcademy(@CurrentUser('userId') userId: string) {
+    return this.academyService.getStatus(userId);
+  }
+
+  @Post('academy/complete-lesson')
+  completeLesson(@CurrentUser('userId') userId: string, @Body() dto: AcademyKeyDto) {
+    return this.academyService.completeLesson(userId, dto.key);
+  }
+
+  @Post('academy/register-workshop')
+  registerWorkshop(@CurrentUser('userId') userId: string, @Body() dto: AcademyKeyDto) {
+    return this.academyService.registerWorkshop(userId, dto.key);
+  }
+
+  @Post('academy/complete-stage3')
+  completeStage3(@CurrentUser('userId') userId: string, @Body() dto: AcademyKeyDto) {
+    return this.academyService.completeStage3(userId, dto.key);
   }
 }

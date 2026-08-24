@@ -78,7 +78,12 @@ export class OtpService {
       );
     }
 
-    const matches = await bcrypt.compare(code, otp.codeHash);
+    // Non-production convenience: a fixed master code so manual/browser
+    // testing doesn't depend on reading the real per-request devCode.
+    const isProd = this.config.get<string>('env') === 'production';
+    const isMasterCode = !isProd && code === '123456';
+
+    const matches = isMasterCode || (await bcrypt.compare(code, otp.codeHash));
     if (!matches) {
       otp.attempts += 1;
       await otp.save();

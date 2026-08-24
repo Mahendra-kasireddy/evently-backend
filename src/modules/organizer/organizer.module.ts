@@ -8,8 +8,10 @@ import {
   SERVICE_CATEGORY_REF_MODEL,
 } from './organizer-config.service';
 import { OrganizerOnboardingService } from './organizer-onboarding.service';
+import { AcademyService } from './academy.service';
 import { OrganizerController } from './organizer.controller';
 import { OrganizerProfile, OrganizerProfileSchema } from './schemas/organizer-profile.schema';
+import { AcademyProgress, AcademyProgressSchema } from './schemas/academy-progress.schema';
 import { BusinessType, BusinessTypeSchema } from './schemas/business-type.schema';
 import { OrganizerCategory, OrganizerCategorySchema } from './schemas/organizer-category.schema';
 import {
@@ -39,6 +41,7 @@ import { NotificationModule } from '../notification/notification.module';
   imports: [
     MongooseModule.forFeature([
       { name: OrganizerProfile.name, schema: OrganizerProfileSchema },
+      { name: AcademyProgress.name, schema: AcademyProgressSchema },
       { name: BusinessType.name, schema: BusinessTypeSchema },
       { name: OrganizerCategory.name, schema: OrganizerCategorySchema },
       // Step 4 (Services) config collections.
@@ -61,7 +64,7 @@ import { NotificationModule } from '../notification/notification.module';
     NotificationModule,
   ],
   controllers: [OrganizerController],
-  providers: [OrganizerService, OrganizerConfigService, OrganizerOnboardingService],
+  providers: [OrganizerService, OrganizerConfigService, OrganizerOnboardingService, AcademyService],
   exports: [OrganizerService],
 })
 export class OrganizerModule {}

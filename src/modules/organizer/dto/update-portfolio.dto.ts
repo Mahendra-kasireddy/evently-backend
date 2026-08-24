@@ -18,6 +18,11 @@ const URL_OPTS = { require_protocol: false, require_tld: true } as const;
 export class UpdatePortfolioDto {
   @IsOptional()
   @IsString()
+  @MaxLength(120)
+  tagline?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(4000)
   businessDescription?: string;
 

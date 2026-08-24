@@ -34,6 +34,65 @@ export class BookingTimelineEntry {
 }
 export const BookingTimelineEntrySchema = SchemaFactory.createForClass(BookingTimelineEntry);
 
+/** Kanban-style status for an organizer's own execution task on a booking. */
+export enum BookingTaskStatus {
+  TODO = 'todo',
+  IN_PROGRESS = 'in_progress',
+  DONE = 'done',
+}
+
+/** Whether an assigned sub-vendor has responded to a task assignment yet. */
+export enum TaskAssignmentStatus {
+  UNASSIGNED = 'unassigned',
+  PENDING = 'pending',
+  ACCEPTED = 'accepted',
+  DECLINED = 'declined',
+}
+
+/**
+ * An organizer-authored to-do for delivering one booking (e.g. "Confirm
+ * 300-plate catering"). Distinct from the fixed lifecycle `steps` checklist
+ * above — this is a free-form board the organizer builds per event.
+ * `assigneeName` is a denormalized snapshot of the sub-vendor's name at
+ * assignment time (or free text, if not assigned to a real sub-vendor) —
+ * kept so the task never depends on a cross-module join to render.
+ */
+@Schema({ _id: true, timestamps: true })
+export class BookingTask {
+  @Prop({ required: true, trim: true })
+  title: string;
+
+  @Prop({ type: String, enum: BookingTaskStatus, default: BookingTaskStatus.TODO })
+  status: BookingTaskStatus;
+
+  @Prop({ trim: true, default: '' })
+  assigneeName: string;
+
+  @Prop({ type: Types.ObjectId, ref: 'SubVendorProfile' })
+  subVendorId?: Types.ObjectId;
+
+  @Prop({
+    type: String,
+    enum: TaskAssignmentStatus,
+    default: TaskAssignmentStatus.UNASSIGNED,
+  })
+  assignmentStatus: TaskAssignmentStatus;
+
+  // Agreed pay for this task, when assigned to a sub-vendor (rupees).
+  @Prop({ default: 0, min: 0 })
+  amount: number;
+
+  @Prop({ type: Date })
+  dueDate?: Date;
+
+  @Prop({ type: { url: String, key: String, originalName: String }, default: null })
+  photoProof: { url: string; key: string; originalName: string } | null;
+
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+export const BookingTaskSchema = SchemaFactory.createForClass(BookingTask);
+
 @Schema({
   timestamps: true,
   collection: 'bookings',
@@ -88,6 +147,10 @@ export class Booking {
   // Chronological status history.
   @Prop({ type: [BookingTimelineEntrySchema], default: [] })
   timeline: BookingTimelineEntry[];
+
+  // Organizer's own execution board for delivering this booking.
+  @Prop({ type: [BookingTaskSchema], default: [] })
+  tasks: BookingTask[];
 
   @Prop({ type: String, enum: BookingStatus, default: BookingStatus.PENDING, index: true })
   status: BookingStatus;

@@ -15,6 +15,8 @@
     "lint": "eslint \"{src,test}/**/*.ts\" --fix",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "seed": "ts-node scripts/seed.ts",
+    "reset:data": "ts-node scripts/reset-data.ts",
+    "check:user": "ts-node scripts/check-user.ts",
     "test": "jest --passWithNoTests"
   },
   "dependencies": {
