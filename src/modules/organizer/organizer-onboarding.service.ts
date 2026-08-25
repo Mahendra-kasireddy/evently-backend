@@ -12,8 +12,12 @@ import {
   OnboardingStatus,
   OrganizerProfile,
   OrganizerProfileDocument,
+  OrganizerReviewAction,
+  ReviewActorRole,
   StoredFile,
 } from './schemas/organizer-profile.schema';
+import { assertOrganizerCanEdit, assertTransition, canOrganizerEdit } from './organizer-lifecycle';
+import { appendReview } from './review-trail';
 import { UpdateOrganizerProfileDto } from './dto/update-organizer-profile.dto';
 import { UpdateVerificationDto } from './dto/update-verification.dto';
 import { UpdateBankDto } from './dto/update-bank.dto';
@@ -118,6 +122,10 @@ export interface OrganizerProfileView {
   onboardingStatus: OnboardingStatus;
   profileCompletion: number;
   submittedAt: string | null;
+  /** True when this organizer may currently write their own onboarding. */
+  canEdit: boolean;
+  /** The outstanding admin reason (rejection / changes requested), if any. */
+  reviewNote: string;
   // Step 1
   firstName: string;
   lastName: string;
@@ -217,14 +225,24 @@ export class OrganizerOnboardingService {
       profile = await this.profileModel.create({
         user: new Types.ObjectId(userId),
         name: user.name || 'New organizer',
-        onboardingStatus: OnboardingStatus.DRAFT,
+        // OTP verification is not approval: a new registration waits for gate 1.
+        onboardingStatus: OnboardingStatus.PENDING_REVIEW,
         profileCompletion: 0,
         active: false,
       });
+      appendReview(profile, {
+        action: OrganizerReviewAction.REGISTERED,
+        fromStatus: OnboardingStatus.PENDING_REVIEW,
+        toStatus: OnboardingStatus.PENDING_REVIEW,
+        actorRole: ReviewActorRole.ORGANIZER,
+        actorId: userId,
+        actorName: user.name || '',
+      });
+      await profile.save();
       await this.notify(
         userId,
-        'Welcome to Evently for Organizers',
-        'Your organizer account is ready. Complete your profile to start receiving leads.',
+        'Registration received',
+        'Thanks for registering as an Evently organizer. Our team is reviewing your registration — we’ll let you know as soon as you can start onboarding.',
       );
     }
 
@@ -255,7 +273,7 @@ export class OrganizerOnboardingService {
     userId: string,
     dto: UpdateOrganizerProfileDto,
   ): Promise<OrganizerProfileView> {
-    const { profile, user } = await this.load(userId);
+    const { profile, user } = await this.loadForEdit(userId);
 
     if (dto.firstName !== undefined) profile.firstName = dto.firstName;
     if (dto.lastName !== undefined) profile.lastName = dto.lastName;
@@ -278,7 +296,7 @@ export class OrganizerOnboardingService {
     userId: string,
     dto: UpdateVerificationDto,
   ): Promise<OrganizerProfileView> {
-    const { profile, user } = await this.load(userId);
+    const { profile, user } = await this.loadForEdit(userId);
 
     if (dto.panNumber) await this.assertUniquePan(profile._id, dto.panNumber);
     if (dto.gstNumber) await this.assertUniqueGst(profile._id, dto.gstNumber);
@@ -302,7 +320,7 @@ export class OrganizerOnboardingService {
 
   /** Step 3 — Bank details. */
   async updateBank(userId: string, dto: UpdateBankDto): Promise<OrganizerProfileView> {
-    const { profile, user } = await this.load(userId);
+    const { profile, user } = await this.loadForEdit(userId);
 
     if (dto.accountHolderName !== undefined) profile.accountHolderName = dto.accountHolderName;
     if (dto.bankName !== undefined) profile.bankName = dto.bankName;
@@ -319,7 +337,7 @@ export class OrganizerOnboardingService {
 
   /** Step 4 — Services. */
   async updateServices(userId: string, dto: UpdateServicesDto): Promise<OrganizerProfileView> {
-    const { profile, user } = await this.load(userId);
+    const { profile, user } = await this.loadForEdit(userId);
 
     if (dto.experience !== undefined) profile.experience = dto.experience;
     if (dto.teamSize !== undefined) profile.teamSize = dto.teamSize;
@@ -349,7 +367,7 @@ export class OrganizerOnboardingService {
 
   /** Step 5 — Portfolio. */
   async updatePortfolio(userId: string, dto: UpdatePortfolioDto): Promise<OrganizerProfileView> {
-    const { profile, user } = await this.load(userId);
+    const { profile, user } = await this.loadForEdit(userId);
 
     if (dto.tagline !== undefined) profile.tagline = dto.tagline;
     if (dto.businessDescription !== undefined)
@@ -376,6 +394,8 @@ export class OrganizerOnboardingService {
 
   async getOnboardingStatus(userId: string): Promise<{
     onboardingStatus: OnboardingStatus;
+    canEdit: boolean;
+    reviewNote: string;
     profileCompletion: number;
     currentStep: string;
     completedSteps: string[];
@@ -388,6 +408,8 @@ export class OrganizerOnboardingService {
     const currentStep = steps.find((s) => !s.complete)?.id ?? steps[steps.length - 1]!.id;
     return {
       onboardingStatus: profile.onboardingStatus,
+      canEdit: canOrganizerEdit(profile.onboardingStatus),
+      reviewNote: this.outstandingNote(profile),
       profileCompletion: this.overall(profile).percent,
       currentStep,
       completedSteps,
@@ -415,7 +437,9 @@ export class OrganizerOnboardingService {
 
   /** Submits the full profile for verification once every required field is present. */
   async completeOnboarding(userId: string): Promise<OrganizerProfileView> {
-    const { profile, user } = await this.load(userId);
+    // Gate-checked like every other write: a pending or rejected organizer gets
+    // a clear 403 rather than a confusing "please complete X" list.
+    const { profile, user } = await this.loadForEdit(userId);
 
     const { missing } = this.overall(profile);
     if (missing.length > 0) {
@@ -431,18 +455,27 @@ export class OrganizerOnboardingService {
     if (!catOk) throw new BadRequestException('Invalid primary category');
     if (!cityOk) throw new BadRequestException('Invalid city');
 
+    // Gate 2. Submission puts the profile in front of an admin; it does NOT
+    // make it live. Only an admin approval sets active = true.
+    const from = profile.onboardingStatus;
+    assertTransition(from, OnboardingStatus.SUBMITTED);
     profile.onboardingStatus = OnboardingStatus.SUBMITTED;
     profile.submittedAt = new Date();
-    // No admin-review gate exists yet — a submitted, fully-completed profile
-    // goes live immediately so customers can find and request quotes from it.
-    profile.active = true;
+    appendReview(profile, {
+      action: OrganizerReviewAction.SUBMITTED,
+      fromStatus: from,
+      toStatus: OnboardingStatus.SUBMITTED,
+      actorRole: ReviewActorRole.ORGANIZER,
+      actorId: userId,
+      actorName: user.name || '',
+    });
     await profile.save();
     await this.syncUserFromProfile(user, profile);
 
     await this.notify(
       userId,
-      'Profile submitted and live',
-      'Thanks! Your profile is complete, submitted, and now visible to customers looking for organizers.',
+      'Profile submitted for review',
+      'Thanks! Your profile is complete and with our team for review. We’ll let you know as soon as it’s approved.',
     );
     return this.toView(profile, user);
   }
@@ -470,6 +503,38 @@ export class OrganizerOnboardingService {
   }
 
   // ---------------------------------------------------------------------------
+  // Reuse by the admin console — same computation, same projection
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The exact view the organizer receives. The admin console renders this, so
+   * the two roles can never drift into showing different onboarding data.
+   */
+  viewFor(profile: OrganizerProfileDocument, user: UserDocument): OrganizerProfileView {
+    return this.toView(profile, user);
+  }
+
+  /** Per-step completion, as the organizer's own wizard computes it. */
+  stepsFor(
+    profile: OrganizerProfileDocument,
+  ): Array<{ id: string; title: string; complete: boolean; missingFields: string[] }> {
+    return this.stepStatus(profile);
+  }
+
+  /** Overall completion percentage and the outstanding required fields. */
+  completionFor(profile: OrganizerProfileDocument): { percent: number; missing: string[] } {
+    const { percent, missing } = this.overall(profile);
+    return { percent, missing: missing.map((m) => m.label) };
+  }
+
+  /** Recomputes and stores completion after an admin edit. */
+  recomputeCompletion(profile: OrganizerProfileDocument): number {
+    const { percent } = this.overall(profile);
+    profile.profileCompletion = percent;
+    return percent;
+  }
+
+  // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
 
@@ -486,6 +551,19 @@ export class OrganizerOnboardingService {
     return { profile, user };
   }
 
+  /**
+   * Same as load(), plus the gate-1/gate-2 check. Every organizer-owned write
+   * goes through this, which is what makes navigating straight to the
+   * onboarding URL pointless — the API refuses regardless of the UI.
+   */
+  private async loadForEdit(
+    userId: string,
+  ): Promise<{ profile: OrganizerProfileDocument; user: UserDocument }> {
+    const loaded = await this.load(userId);
+    assertOrganizerCanEdit(loaded.profile.onboardingStatus);
+    return loaded;
+  }
+
   /** Recomputes completion, advances status, fires the 100% notification, saves. */
   private async finalizeSave(
     userId: string,
@@ -495,7 +573,14 @@ export class OrganizerOnboardingService {
     const wasComplete = (profile.profileCompletion ?? 0) >= 100;
     const { percent } = this.overall(profile);
     profile.profileCompletion = percent;
-    if (profile.onboardingStatus === OnboardingStatus.DRAFT && percent > 0) {
+    if (
+      percent > 0 &&
+      (profile.onboardingStatus === OnboardingStatus.DRAFT ||
+        profile.onboardingStatus === OnboardingStatus.CHANGES_REQUESTED)
+    ) {
+      // Editing after "changes requested" puts the profile back into onboarding,
+      // so the admin queue only shows what is actually waiting on them.
+      assertTransition(profile.onboardingStatus, OnboardingStatus.IN_PROGRESS);
       profile.onboardingStatus = OnboardingStatus.IN_PROGRESS;
     }
     await profile.save();
@@ -600,6 +685,8 @@ export class OrganizerOnboardingService {
       onboardingStatus: profile.onboardingStatus,
       profileCompletion: profile.profileCompletion,
       submittedAt: profile.submittedAt ? profile.submittedAt.toISOString() : null,
+      canEdit: canOrganizerEdit(profile.onboardingStatus),
+      reviewNote: this.outstandingNote(profile),
       firstName: profile.firstName,
       lastName: profile.lastName,
       contactEmail: profile.contactEmail,
@@ -664,6 +751,31 @@ export class OrganizerOnboardingService {
   }
 
   /** Best-effort notification — never blocks the business operation. */
+  /**
+   * The reason the organizer still needs to act on, derived from the trail
+   * rather than duplicated into its own column — one source of truth.
+   */
+  private outstandingNote(profile: OrganizerProfileDocument): string {
+    if (
+      profile.onboardingStatus !== OnboardingStatus.REJECTED &&
+      profile.onboardingStatus !== OnboardingStatus.CHANGES_REQUESTED
+    ) {
+      return '';
+    }
+    const trail = profile.reviewTrail ?? [];
+    for (let i = trail.length - 1; i >= 0; i -= 1) {
+      const entry = trail[i];
+      if (!entry) continue;
+      if (
+        entry.action === OrganizerReviewAction.REJECTED ||
+        entry.action === OrganizerReviewAction.CHANGES_REQUESTED
+      ) {
+        return entry.reason ?? '';
+      }
+    }
+    return '';
+  }
+
   private async notify(userId: string, title: string, body: string): Promise<void> {
     try {
       await this.notificationService.create(

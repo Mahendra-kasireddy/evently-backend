@@ -10,6 +10,8 @@ import {
 import { OrganizerOnboardingService } from './organizer-onboarding.service';
 import { AcademyService } from './academy.service';
 import { OrganizerController } from './organizer.controller';
+import { AdminOrganizerController } from './admin-organizer.controller';
+import { AdminOrganizerService } from './admin-organizer.service';
 import { OrganizerProfile, OrganizerProfileSchema } from './schemas/organizer-profile.schema';
 import { AcademyProgress, AcademyProgressSchema } from './schemas/academy-progress.schema';
 import { BusinessType, BusinessTypeSchema } from './schemas/business-type.schema';
@@ -35,12 +37,17 @@ import { PlanOccasionSchema } from '../plan/schemas/plan-occasion.schema';
 import { PlanServiceCategorySchema } from '../plan/schemas/plan-service-category.schema';
 import { AuthModule } from '../auth/auth.module';
 import { UserModule } from '../user/user.module';
+import { UserSchema, User } from '../user/schemas/user.schema';
 import { NotificationModule } from '../notification/notification.module';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: OrganizerProfile.name, schema: OrganizerProfileSchema },
+      // Read-only here: the admin list needs each organizer's phone, which
+      // lives on the user account. Registering the schema (not the owning
+      // module) keeps this free of a circular import.
+      { name: User.name, schema: UserSchema },
       { name: AcademyProgress.name, schema: AcademyProgressSchema },
       { name: BusinessType.name, schema: BusinessTypeSchema },
       { name: OrganizerCategory.name, schema: OrganizerCategorySchema },
@@ -63,8 +70,14 @@ import { NotificationModule } from '../notification/notification.module';
     UserModule,
     NotificationModule,
   ],
-  controllers: [OrganizerController],
-  providers: [OrganizerService, OrganizerConfigService, OrganizerOnboardingService, AcademyService],
+  controllers: [OrganizerController, AdminOrganizerController],
+  providers: [
+    OrganizerService,
+    OrganizerConfigService,
+    OrganizerOnboardingService,
+    AcademyService,
+    AdminOrganizerService,
+  ],
   exports: [OrganizerService],
 })
 export class OrganizerModule {}

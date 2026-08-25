@@ -10,13 +10,41 @@ export enum OrganizerTier {
   PLATINUM = 'Platinum',
 }
 
-/** Onboarding lifecycle for a self-registered organizer. */
+/**
+ * Onboarding lifecycle for a self-registered organizer.
+ *
+ * Two admin gates, in order:
+ *   1. PENDING_REVIEW -> DRAFT   an admin admits the registration to onboarding
+ *   2. SUBMITTED      -> APPROVED an admin accepts the completed profile
+ *
+ * OTP verification alone reaches PENDING_REVIEW and nothing further. The
+ * allowed edges live in organizer-lifecycle.ts and are enforced server-side.
+ */
 export enum OnboardingStatus {
-  DRAFT = 'draft', // registered; still filling in details
+  PENDING_REVIEW = 'pending_review', // registered via OTP; awaiting admin gate 1
+  DRAFT = 'draft', // admitted to onboarding; nothing filled in yet
   IN_PROGRESS = 'in_progress', // some steps saved
-  SUBMITTED = 'submitted', // submitted for verification
+  SUBMITTED = 'submitted', // submitted for verification (gate 2)
+  CHANGES_REQUESTED = 'changes_requested', // admin sent it back for edits
   APPROVED = 'approved', // verified & live
-  REJECTED = 'rejected', // needs changes
+  REJECTED = 'rejected', // refused
+}
+
+/** What produced a review-trail entry. */
+export enum OrganizerReviewAction {
+  REGISTERED = 'registered',
+  ADMITTED = 'admitted', // gate 1 passed: may now onboard
+  SUBMITTED = 'submitted',
+  CHANGES_REQUESTED = 'changes_requested',
+  APPROVED = 'approved', // gate 2 passed: live
+  REJECTED = 'rejected',
+  ADMIN_EDIT = 'admin_edit', // an admin wrote onboarding fields
+  REOPENED = 'reopened', // a rejected organizer was let back in
+}
+
+export enum ReviewActorRole {
+  ORGANIZER = 'organizer',
+  ADMIN = 'admin',
 }
 
 /** File metadata persisted for an uploaded asset (mirrors UploadedFileMeta). */
@@ -41,6 +69,48 @@ export class StoredFile {
   uploadedAt?: Date;
 }
 export const StoredFileSchema = SchemaFactory.createForClass(StoredFile);
+
+/**
+ * One entry in the organizer's review trail.
+ *
+ * This is the audit record for organizer-lifecycle actions specifically — who
+ * changed the state, from what to what, and why. It is NOT a platform-wide
+ * audit log; nothing else in Evently writes here.
+ */
+@Schema({ _id: true })
+export class OrganizerReviewEntry {
+  @Prop({ type: String, enum: OrganizerReviewAction, required: true })
+  action: OrganizerReviewAction;
+
+  @Prop({ type: String, enum: OnboardingStatus, required: true })
+  fromStatus: OnboardingStatus;
+
+  @Prop({ type: String, enum: OnboardingStatus, required: true })
+  toStatus: OnboardingStatus;
+
+  /** Required for rejection and changes-requested; empty otherwise. */
+  @Prop({ trim: true, default: '', maxlength: 2000 })
+  reason: string;
+
+  @Prop({ type: String, enum: ReviewActorRole, required: true })
+  actorRole: ReviewActorRole;
+
+  /** The acting user. Always set — every entry has a real actor. */
+  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  actor: Types.ObjectId;
+
+  /** Snapshot of the actor's name at the time, so the trail reads later. */
+  @Prop({ trim: true, default: '' })
+  actorName: string;
+
+  /** For ADMIN_EDIT: which profile fields the admin wrote. */
+  @Prop({ type: [String], default: [] })
+  fields: string[];
+
+  @Prop({ type: Date, default: () => new Date() })
+  at: Date;
+}
+export const OrganizerReviewEntrySchema = SchemaFactory.createForClass(OrganizerReviewEntry);
 
 @Schema({
   timestamps: true,
@@ -215,6 +285,14 @@ export class OrganizerProfile {
 
   @Prop({ type: Date })
   submittedAt?: Date;
+
+  /**
+   * Append-only lifecycle audit: registration, both admin gates, rejections,
+   * changes requested and admin edits, each with its actor. Read by the admin
+   * console and by the organizer app (for the outstanding reason).
+   */
+  @Prop({ type: [OrganizerReviewEntrySchema], default: [] })
+  reviewTrail: OrganizerReviewEntry[];
 
   // Soft delete — excluded from all reads; audit timestamps come from { timestamps }.
   @Prop({ type: Date, default: null, index: true })
