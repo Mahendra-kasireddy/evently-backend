@@ -38,6 +38,31 @@ export default () => ({
     smsApiKey: process.env.OTP_SMS_API_KEY,
   },
 
+  whatsapp: {
+    /**
+     * 'handoff' opens the customer's own WhatsApp with the message ready;
+     * 'cloud' posts to Meta's Cloud API and needs every value below plus an
+     * approved template. Defaults to handoff so the feature works with no
+     * external account at all.
+     */
+    delivery: process.env.WHATSAPP_DELIVERY ?? 'handoff',
+    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID ?? '',
+    accessToken: process.env.WHATSAPP_ACCESS_TOKEN ?? '',
+    templateName: process.env.WHATSAPP_TEMPLATE_NAME ?? '',
+    templateLanguage: process.env.WHATSAPP_TEMPLATE_LANGUAGE ?? 'en',
+    graphVersion: process.env.WHATSAPP_GRAPH_VERSION ?? 'v21.0',
+  },
+
+  /** Where the guest-facing links point. */
+  publicUrls: {
+    /** The API's own externally reachable base, including the /api prefix. */
+    api: process.env.PUBLIC_API_URL ?? '',
+    /** The web app, where a guest actually reads the invitation. */
+    web: process.env.PUBLIC_WEB_URL ?? '',
+    /** Optional store link, included in the WhatsApp message only when set. */
+    app: process.env.PUBLIC_APP_LINK ?? '',
+  },
+
   socket: {
     path: process.env.SOCKET_IO_PATH ?? '/socket.io',
     corsOrigin: process.env.SOCKET_IO_CORS_ORIGIN ?? '*',

@@ -6,6 +6,8 @@ import {
   Invitation,
   InvitationDocument,
   InvitationStatus,
+  InvitationSubEvent,
+  SubEventVisibility,
 } from './schemas/invitation.schema';
 import { Booking, BookingDocument } from '../booking/schemas/booking.schema';
 import { OrganizerService } from '../organizer/organizer.service';
@@ -15,9 +17,11 @@ import { UpdateInvitationDto } from './dto/update-invitation.dto';
 import { PersonalizeBlockDto } from './dto/personalize-block.dto';
 import { RequestChangeDto } from './dto/request-change.dto';
 import {
+  CARD_PALETTE,
   DEFAULT_BLOCKS,
   DEFAULT_EYEBROW,
   DEFAULT_JOINER,
+  DEFAULT_SUB_EVENT_MINUTES,
   DEFAULT_TEMPLATE_ID,
   INVITATION_TEMPLATES,
   RSVP_LEAD_DAYS,
@@ -118,6 +122,27 @@ export class InvitationService {
         body: b.body ?? '',
       }));
       invitation.markModified('blocks');
+    }
+    /*
+     * Mapped field by field rather than spread, so a client cannot smuggle a
+     * property the DTO does not declare into a stored subdocument. Array order
+     * is the display order and is preserved exactly as sent.
+     */
+    if (dto.subEvents) {
+      invitation.subEvents = dto.subEvents.map((e) => ({
+        name: e.name,
+        eventDate: e.eventDate ?? '',
+        eventTime: e.eventTime ?? '',
+        endTime: e.endTime ?? '',
+        timezone: e.timezone ?? invitation.details.timezone,
+        venueName: e.venueName ?? '',
+        venueAddress: e.venueAddress ?? '',
+        dressCode: e.dressCode ?? '',
+        note: e.note ?? '',
+        colour: e.colour ?? '',
+        visibility: e.visibility ?? SubEventVisibility.ALL_GUESTS,
+      })) as InvitationSubEvent[];
+      invitation.markModified('subEvents');
     }
     if (invitation.status === InvitationStatus.APPROVED) {
       invitation.status = InvitationStatus.DRAFT;
@@ -369,7 +394,28 @@ export class InvitationService {
       approvedAt: invitation.approvedAt ?? null,
       details: invitation.details,
       blocks: invitation.blocks,
+      /*
+       * Ids are surfaced because the builder needs a stable key per card for
+       * React and for the calendar entry's UID — array index would change the
+       * moment a card is reordered or removed.
+       */
+      subEvents: invitation.subEvents.map((e) => ({
+        id: (e as { _id?: Types.ObjectId })._id?.toString() ?? '',
+        name: e.name,
+        eventDate: e.eventDate,
+        eventTime: e.eventTime,
+        endTime: e.endTime,
+        timezone: e.timezone,
+        venueName: e.venueName,
+        venueAddress: e.venueAddress,
+        dressCode: e.dressCode,
+        note: e.note,
+        colour: e.colour,
+        visibility: e.visibility,
+      })),
       templates: INVITATION_TEMPLATES,
+      cardPalette: CARD_PALETTE,
+      defaultSubEventMinutes: DEFAULT_SUB_EVENT_MINUTES,
       // Outstanding asks only — a resolved one is history, not a to-do.
       changeRequests: invitation.changeRequests
         .filter((r) => !r.resolved)

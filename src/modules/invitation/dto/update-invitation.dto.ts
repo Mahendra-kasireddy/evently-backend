@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsEnum,
@@ -10,10 +11,13 @@ import {
   MaxLength,
   ValidateNested,
 } from 'class-validator';
-import { BlockOwner } from '../schemas/invitation.schema';
-import { INVITATION_TEMPLATES } from '../invitation-defaults';
+import { IsIanaTimeZone } from '../../../common/validators/is-iana-timezone.validator';
+import { BlockOwner, SubEventVisibility } from '../schemas/invitation.schema';
+import { CARD_COLOUR_IDS, INVITATION_TEMPLATES } from '../invitation-defaults';
 
 const TEMPLATE_IDS = INVITATION_TEMPLATES.map((t) => t.id);
+/** A card may also carry no colour at all, meaning "follow the template". */
+const COLOUR_IDS = ['', ...CARD_COLOUR_IDS];
 
 /** `yyyy-mm-dd`, or empty for "not set yet". */
 const DATE_RE = /^$|^\d{4}-\d{2}-\d{2}$/;
@@ -68,6 +72,16 @@ export class InvitationDetailsDto {
   @MaxLength(500)
   message?: string;
 
+  /** Checked against the runtime's own zone database, not a regex. */
+  @IsOptional()
+  @IsIanaTimeZone()
+  timezone?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(400)
+  postEventMessage?: string;
+
   @IsOptional()
   @IsBoolean()
   rsvpEnabled?: boolean;
@@ -111,10 +125,63 @@ export class InvitationBlockDto {
   body?: string;
 }
 
+/** One Save-the-Date card. */
+export class InvitationSubEventDto {
+  @IsString()
+  @MaxLength(80)
+  name: string;
+
+  @IsOptional()
+  @Matches(DATE_RE, { message: 'eventDate must be yyyy-mm-dd' })
+  eventDate?: string;
+
+  @IsOptional()
+  @Matches(TIME_RE, { message: 'eventTime must be HH:mm' })
+  eventTime?: string;
+
+  @IsOptional()
+  @Matches(TIME_RE, { message: 'endTime must be HH:mm' })
+  endTime?: string;
+
+  @IsOptional()
+  @IsIanaTimeZone()
+  timezone?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  venueName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(240)
+  venueAddress?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  dressCode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  note?: string;
+
+  /** A palette id, never a raw colour value the client made up. */
+  @IsOptional()
+  @IsIn(COLOUR_IDS)
+  colour?: string;
+
+  @IsOptional()
+  @IsEnum(SubEventVisibility)
+  visibility?: SubEventVisibility;
+}
+
 /**
- * Partial update of one invitation. `blocks`, when present, replaces the whole
- * list — the builder reorders, adds and hides sections, so a full replacement
- * is both simpler and race-free compared with per-block patches.
+ * Partial update of one invitation. `blocks` and `subEvents`, when present,
+ * each replace the whole list — the builder reorders, adds and hides them, so a
+ * full replacement is both simpler and race-free compared with per-item
+ * patches. Array order is the display order.
  */
 export class UpdateInvitationDto {
   @IsOptional()
@@ -127,4 +194,11 @@ export class UpdateInvitationDto {
   @ValidateNested({ each: true })
   @Type(() => InvitationBlockDto)
   blocks?: InvitationBlockDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => InvitationSubEventDto)
+  subEvents?: InvitationSubEventDto[];
 }

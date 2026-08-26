@@ -63,6 +63,20 @@ export const envValidationSchema = Joi.object({
   // Uploads. `local` (default) needs nothing else; `s3` requires bucket + keys.
   UPLOAD_DRIVER: Joi.string().valid('local', 's3').default('local'),
   UPLOAD_PUBLIC_BASE_URL: Joi.string().allow('').optional(),
+
+  // WhatsApp guest sharing. 'handoff' needs nothing; 'cloud' needs the rest,
+  // which the provider checks at send time and reports rather than assuming.
+  WHATSAPP_DELIVERY: Joi.string().valid('handoff', 'cloud').default('handoff'),
+  WHATSAPP_PHONE_NUMBER_ID: Joi.string().allow('').optional(),
+  WHATSAPP_ACCESS_TOKEN: Joi.string().allow('').optional(),
+  WHATSAPP_TEMPLATE_NAME: Joi.string().allow('').optional(),
+  WHATSAPP_TEMPLATE_LANGUAGE: Joi.string().allow('').optional(),
+  WHATSAPP_GRAPH_VERSION: Joi.string().allow('').optional(),
+
+  // Guest-facing link bases.
+  PUBLIC_API_URL: Joi.string().allow('').optional(),
+  PUBLIC_WEB_URL: Joi.string().allow('').optional(),
+  PUBLIC_APP_LINK: Joi.string().allow('').optional(),
   UPLOAD_LOCAL_DIR: Joi.string().default('uploads'),
   S3_ENDPOINT: Joi.string().allow('').optional(),
   S3_REGION: Joi.string().default('us-east-1'),

@@ -134,6 +134,38 @@ export const INVITATION_TEMPLATES: InvitationTemplateConfig[] = [
   },
 ];
 
+/**
+ * Colours a Save-the-Date card can be given.
+ *
+ * A closed, server-owned set for the same reason `INVITATION_TEMPLATES` is one:
+ * it is a product decision, and the client renders what the API serves rather
+ * than carrying its own copy that drifts. Each entry carries the two values a
+ * card actually needs — a wash for the card body and an ink that is legible on
+ * it — so contrast is decided once here rather than per organizer.
+ */
+export interface CardColourConfig {
+  id: string;
+  label: string;
+  /** Card background. */
+  wash: string;
+  /** Text and rule colour on that wash. */
+  ink: string;
+}
+
+export const CARD_PALETTE: CardColourConfig[] = [
+  { id: 'sand', label: 'Sand', wash: '#F6EBDD', ink: '#5A4326' },
+  { id: 'rose', label: 'Rose', wash: '#F8E4E6', ink: '#6E2B36' },
+  { id: 'sage', label: 'Sage', wash: '#E4EFE4', ink: '#2C4A31' },
+  { id: 'sky', label: 'Sky', wash: '#E3EDF8', ink: '#25415F' },
+  { id: 'lilac', label: 'Lilac', wash: '#EDE6F6', ink: '#43305E' },
+  { id: 'ink', label: 'Ink', wash: '#E7E9EF', ink: '#1F2537' },
+];
+
+export const CARD_COLOUR_IDS: string[] = CARD_PALETTE.map((c) => c.id);
+
+/** Minutes a Save-the-Date calendar entry runs for when no end time is given. */
+export const DEFAULT_SUB_EVENT_MINUTES = 180;
+
 export const DEFAULT_TEMPLATE_ID = 'midnight';
 export const DEFAULT_EYEBROW = 'TOGETHER WITH THEIR FAMILIES';
 export const DEFAULT_JOINER = 'and';
