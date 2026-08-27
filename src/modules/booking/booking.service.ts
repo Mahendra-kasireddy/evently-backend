@@ -7,6 +7,9 @@ import {
   BookingStatus,
   BookingTaskStatus,
   ONGOING_BOOKING_STATUSES,
+  AWAITING_ORGANIZER_STATUSES,
+  ORGANIZER_RESPONSE_WINDOW_HOURS,
+  PaymentStatus,
   TaskAssignmentStatus,
 } from './schemas/booking.schema';
 import { CreateBookingDto } from './dto/create-booking.dto';
@@ -88,17 +91,79 @@ export interface LatestBookingSummary {
 
 const STATUS_META: Record<BookingStatus, { label: string; progress: number }> = {
   [BookingStatus.PENDING]: {
-    label: 'Booking placed — awaiting organizer confirmation',
-    progress: 10,
+    label: 'Booking placed',
+    progress: 5,
+  },
+  [BookingStatus.AWAITING_ORGANIZER]: {
+    label: 'Advance paid — awaiting organizer confirmation',
+    progress: 20,
   },
   [BookingStatus.CONFIRMED]: { label: 'Organizer confirmed your booking', progress: 40 },
   [BookingStatus.IN_PROGRESS]: { label: 'Your event is now in progress', progress: 70 },
   [BookingStatus.COMPLETED]: { label: 'Event completed', progress: 100 },
   [BookingStatus.CANCELLED]: { label: 'Booking cancelled', progress: 0 },
-  [BookingStatus.REJECTED]: { label: 'Organizer could not take this booking', progress: 0 },
+  [BookingStatus.REJECTED]: { label: 'Organizer declined this booking', progress: 0 },
+  [BookingStatus.EXPIRED]: {
+    label: 'Organizer did not respond in time',
+    progress: 0,
+  },
 };
 
-const TERMINAL = [BookingStatus.COMPLETED, BookingStatus.CANCELLED, BookingStatus.REJECTED];
+const TERMINAL = [
+  BookingStatus.COMPLETED,
+  BookingStatus.CANCELLED,
+  BookingStatus.REJECTED,
+  BookingStatus.EXPIRED,
+];
+
+/**
+ * The only transitions the API will make. Without this, `PATCH /booking/:id/status`
+ * accepted any enum value from any live state — an organizer could jump a booking
+ * straight from "awaiting confirmation" to "completed" without ever accepting it.
+ */
+const ALLOWED_TRANSITIONS: Record<BookingStatus, BookingStatus[]> = {
+  [BookingStatus.PENDING]: [
+    BookingStatus.AWAITING_ORGANIZER,
+    BookingStatus.CONFIRMED,
+    BookingStatus.REJECTED,
+    BookingStatus.CANCELLED,
+    BookingStatus.EXPIRED,
+  ],
+  [BookingStatus.AWAITING_ORGANIZER]: [
+    BookingStatus.CONFIRMED,
+    BookingStatus.REJECTED,
+    BookingStatus.CANCELLED,
+    BookingStatus.EXPIRED,
+  ],
+  [BookingStatus.CONFIRMED]: [
+    BookingStatus.IN_PROGRESS,
+    BookingStatus.COMPLETED,
+    BookingStatus.CANCELLED,
+  ],
+  [BookingStatus.IN_PROGRESS]: [BookingStatus.COMPLETED, BookingStatus.CANCELLED],
+  [BookingStatus.COMPLETED]: [],
+  [BookingStatus.CANCELLED]: [],
+  [BookingStatus.REJECTED]: [],
+  [BookingStatus.EXPIRED]: [],
+};
+
+/** The customer-facing checklist, in order. Index maps to `STEP_ORDER` below. */
+const BOOKING_STEPS = [
+  'Booking placed',
+  'Advance paid',
+  'Organizer confirmed',
+  'Event in progress',
+  'Completed',
+];
+
+/** Which checklist index each status has reached. */
+const STEP_ORDER: Partial<Record<BookingStatus, number>> = {
+  [BookingStatus.PENDING]: 0,
+  [BookingStatus.AWAITING_ORGANIZER]: 1,
+  [BookingStatus.CONFIRMED]: 2,
+  [BookingStatus.IN_PROGRESS]: 3,
+  [BookingStatus.COMPLETED]: 4,
+};
 
 @Injectable()
 export class BookingService {
@@ -163,11 +228,12 @@ export class BookingService {
     organizerId: Types.ObjectId | undefined,
     title: string,
     body: string,
+    link?: string,
   ): Promise<void> {
     if (!organizerId) return;
     try {
       const profile = await this.organizerService.findById(organizerId.toString());
-      await this.notifyUser(profile.user, title, body);
+      await this.notifyUser(profile.user, title, body, link);
     } catch (err) {
       this.logger.warn(`Organizer booking notification failed: ${String(err)}`);
     }
@@ -206,7 +272,12 @@ export class BookingService {
       cust && typeof cust === 'object' && 'name' in cust
         ? { id: (cust._id as Types.ObjectId).toString(), name: cust.name }
         : null;
-    const advanceAmount = Math.round(b.amount * 0.3);
+    /*
+     * Legacy rows predate the stored snapshot; they fall back to the old
+     * hardcoded 30% so an existing booking still renders a sane split.
+     */
+    const advancePercentage = b.advancePercentage || 30;
+    const advanceAmount = b.advanceAmount || Math.round((b.amount * advancePercentage) / 100);
     return {
       id: b._id.toString(),
       ref: b.ref,
@@ -218,7 +289,13 @@ export class BookingService {
       daysToGo: this.daysUntil(b.eventDate),
       amount: b.amount,
       advanceAmount,
-      balanceAmount: b.amount - advanceAmount,
+      advancePercentage,
+      balanceAmount: Math.max(0, b.amount - advanceAmount),
+      paymentStatus: b.paymentStatus ?? PaymentStatus.UNPAID,
+      amountPaid: b.amountPaid ?? 0,
+      advancePaidAt: b.advancePaidAt ?? null,
+      organizerRespondBy: b.organizerRespondBy ?? null,
+      declineReason: b.declineReason ?? '',
       progress: b.progress,
       steps: b.steps,
       tasks: b.tasks.map((t) => ({
@@ -237,6 +314,9 @@ export class BookingService {
       organizer,
       customer,
       quotationId: b.quotation ? b.quotation.toString() : null,
+      // The quote request this booking came from — the link My Events uses to
+      // show the request, its responses and this booking as one event.
+      requestId: b.request ? b.request.toString() : null,
       createdAt: b.createdAt,
       updatedAt: b.updatedAt,
     };
@@ -257,6 +337,7 @@ export class BookingService {
   /** Statuses a customer would call "my booked event". */
   private static readonly LIVE_BOOKING_STATUSES = [
     BookingStatus.PENDING,
+    BookingStatus.AWAITING_ORGANIZER,
     BookingStatus.CONFIRMED,
     BookingStatus.IN_PROGRESS,
   ];
@@ -330,7 +411,7 @@ export class BookingService {
     const invitationApproved = invitation?.status === InvitationStatus.APPROVED;
 
     const steps = this.bookedMilestones(booking, invitationApproved);
-    const confirmed = booking.status !== BookingStatus.PENDING;
+    const confirmed = !(AWAITING_ORGANIZER_STATUSES as BookingStatus[]).includes(booking.status);
 
     const occasion = (booking.occasion ?? '').trim();
     const date = BookingService.dateLabel(booking.eventDate);
@@ -457,6 +538,11 @@ export class BookingService {
       ? `${seed.occasion}${seed.when ? ` · ${seed.when}` : ''}`
       : 'Your event';
 
+    const placedAt = new Date();
+    const respondBy = new Date(
+      placedAt.getTime() + ORGANIZER_RESPONSE_WINDOW_HOURS * 60 * 60 * 1000,
+    );
+
     const created = await this.bookingModel.create({
       customer: new Types.ObjectId(seed.customerId),
       organizer: seed.organizerId ? new Types.ObjectId(seed.organizerId) : undefined,
@@ -469,33 +555,47 @@ export class BookingService {
       description: `${seed.occasion || 'Event'} for ${seed.guests || 'your guests'}.`.trim(),
       eventDate,
       amount: seed.amount,
-      progress: STATUS_META[BookingStatus.PENDING].progress,
-      status: BookingStatus.PENDING,
-      steps: [
-        { label: 'Booking placed', done: true },
-        { label: 'Organizer confirmed', done: false },
-        { label: 'Event in progress', done: false },
-        { label: 'Completed', done: false },
-      ],
+      /*
+       * Creating the booking IS the advance payment in this flow — the customer
+       * reaches `POST /booking` only from checkout's "Confirm & Pay". So the
+       * payment axis is settled here, and the booking axis moves to
+       * AWAITING_ORGANIZER: paid, but not yet accepted by anyone.
+       */
+      advancePercentage: seed.advancePercentage,
+      advanceAmount: seed.advanceAmount,
+      amountPaid: seed.advanceAmount,
+      paymentStatus: PaymentStatus.ADVANCE_PAID,
+      advancePaidAt: placedAt,
+      organizerRespondBy: respondBy,
+      progress: STATUS_META[BookingStatus.AWAITING_ORGANIZER].progress,
+      status: BookingStatus.AWAITING_ORGANIZER,
+      steps: BOOKING_STEPS.map((label, i) => ({ label, done: i <= 1 })),
       timeline: [
         {
           status: BookingStatus.PENDING,
           label: STATUS_META[BookingStatus.PENDING].label,
-          at: new Date(),
+          at: placedAt,
+        },
+        {
+          status: BookingStatus.AWAITING_ORGANIZER,
+          label: STATUS_META[BookingStatus.AWAITING_ORGANIZER].label,
+          note: `Advance of ₹${seed.advanceAmount.toLocaleString('en-IN')} received.`,
+          at: placedAt,
         },
       ],
     });
 
     await this.notifyUser(
       created.customer,
-      'Booking placed 🎉',
-      `Your booking ${created.ref} is placed. We've asked the organizer to confirm.`,
-      '/workspace',
+      'Advance paid — awaiting organizer 🎉',
+      `We received your advance for ${created.ref}. Your organizer has ${ORGANIZER_RESPONSE_WINDOW_HOURS}h to confirm.`,
+      `/booking-details/${created._id.toString()}`,
     );
     await this.notifyOrganizer(
       created.organizer,
       'New booking to confirm',
-      `A customer booked you for their ${seed.occasion || 'event'} (${created.ref}). Please confirm.`,
+      `A customer paid the advance for their ${seed.occasion || 'event'} (${created.ref}). Accept or decline within ${ORGANIZER_RESPONSE_WINDOW_HOURS}h.`,
+      `/organizer/events/${created._id.toString()}`,
     );
 
     const populated = await created.populate('organizer', 'name initials avatarColor tier rating');
@@ -527,6 +627,7 @@ export class BookingService {
       .populate('organizer', 'name initials avatarColor tier rating')
       .sort({ createdAt: -1 })
       .exec();
+    await Promise.all(bookings.map((b) => this.expireIfOverdue(b)));
     return bookings.map((b) => this.detailView(b));
   }
 
@@ -542,6 +643,7 @@ export class BookingService {
       .populate('customer', 'name')
       .sort({ eventDate: 1 })
       .exec();
+    await Promise.all(bookings.map((b) => this.expireIfOverdue(b)));
     return bookings.map((b) => this.detailView(b));
   }
 
@@ -1189,6 +1291,7 @@ export class BookingService {
   async findOne(actor: AuthUser, id: string): Promise<Record<string, unknown>> {
     const booking = await this.loadBooking(id);
     await this.assertCanView(booking, actor);
+    await this.expireIfOverdue(booking);
     return this.detailView(booking);
   }
 
@@ -1248,6 +1351,7 @@ export class BookingService {
     dto: UpdateBookingStatusDto,
   ): Promise<Record<string, unknown>> {
     const booking = await this.loadBooking(id);
+    await this.expireIfOverdue(booking);
 
     if (TERMINAL.includes(booking.status)) {
       throw new ForbiddenException(`This booking is already ${booking.status}`);
@@ -1259,18 +1363,28 @@ export class BookingService {
     if (dto.status === BookingStatus.CANCELLED) {
       // Either party may cancel while the booking is still cancellable.
       if (!owner && !manager) throw new ForbiddenException('You cannot cancel this booking');
-      if (![BookingStatus.PENDING, BookingStatus.CONFIRMED].includes(booking.status)) {
-        throw new ForbiddenException('This booking can no longer be cancelled');
-      }
     } else {
-      // Confirm / progress / complete / reject are organizer/admin actions.
+      // Confirm / decline / progress / complete are organizer/admin actions.
       if (!manager) throw new ForbiddenException('Only the organizer can update this booking');
+    }
+
+    if (!ALLOWED_TRANSITIONS[booking.status].includes(dto.status)) {
+      throw new ForbiddenException(`A ${booking.status} booking cannot move to ${dto.status}`);
     }
 
     const meta = STATUS_META[dto.status];
     booking.status = dto.status;
+    // A decline keeps the organizer's reason on the booking so the customer
+    // sees why, not just that it happened.
+    if (dto.status === BookingStatus.REJECTED) {
+      booking.declineReason = dto.note?.trim() ?? '';
+    }
     if (meta.progress > 0 || dto.status === BookingStatus.COMPLETED) {
       booking.progress = meta.progress;
+    }
+    // Confirming closes the response window — nothing left to expire.
+    if (dto.status === BookingStatus.CONFIRMED) {
+      booking.organizerRespondBy = undefined;
     }
     booking.timeline.push({
       status: dto.status,
@@ -1285,17 +1399,46 @@ export class BookingService {
     return this.detailView(booking);
   }
 
+  /**
+   * Lapse a booking the organizer never answered. There is no scheduler in this
+   * service, so the deadline is enforced the moment anyone reads the booking —
+   * which is the only time the state actually matters to someone.
+   */
+  private async expireIfOverdue(booking: BookingDocument): Promise<boolean> {
+    if (!(AWAITING_ORGANIZER_STATUSES as BookingStatus[]).includes(booking.status)) return false;
+    if (!booking.organizerRespondBy || booking.organizerRespondBy.getTime() > Date.now()) {
+      return false;
+    }
+    booking.status = BookingStatus.EXPIRED;
+    booking.progress = STATUS_META[BookingStatus.EXPIRED].progress;
+    booking.timeline.push({
+      status: BookingStatus.EXPIRED,
+      label: STATUS_META[BookingStatus.EXPIRED].label,
+      note: 'The organizer did not accept or decline inside the response window.',
+      at: new Date(),
+    });
+    await booking.save();
+    await this.notifyUser(
+      booking.customer,
+      'Organizer did not respond',
+      `Booking ${booking.ref} expired because the organizer did not confirm in time. Your advance is eligible for a refund.`,
+      `/booking-details/${booking._id.toString()}`,
+    );
+    return true;
+  }
+
   /** Marks the checklist steps done up to the current status. */
   private syncSteps(booking: BookingDocument): void {
-    const order = [
-      BookingStatus.PENDING,
-      BookingStatus.CONFIRMED,
-      BookingStatus.IN_PROGRESS,
-      BookingStatus.COMPLETED,
-    ];
-    const reached = order.indexOf(booking.status);
-    if (reached < 0) return; // cancelled / rejected — leave steps as-is
-    booking.steps = booking.steps.map((s, i) => ({ ...s, done: i <= reached }));
+    const reached = STEP_ORDER[booking.status];
+    // Cancelled / declined / expired never advance the checklist.
+    if (reached === undefined) return;
+    // Older bookings were created with the pre-payment four-step checklist;
+    // rebuild against the canonical list so indexes and labels always agree.
+    const steps =
+      booking.steps.length === BOOKING_STEPS.length
+        ? booking.steps
+        : BOOKING_STEPS.map((label) => ({ label, done: false }));
+    booking.steps = steps.map((s, i) => ({ ...s, done: i <= reached }));
   }
 
   private async emitTransitionNotifications(
@@ -1307,8 +1450,9 @@ export class BookingService {
       case BookingStatus.CONFIRMED:
         await this.notifyUser(
           booking.customer,
-          'Booking confirmed',
-          `Your organizer confirmed booking ${ref}.`,
+          'Organizer confirmed',
+          `Your organizer confirmed booking ${ref}. Your event is locked in.`,
+          `/booking-details/${booking._id.toString()}`,
         );
         break;
       case BookingStatus.IN_PROGRESS:
@@ -1345,8 +1489,11 @@ export class BookingService {
       case BookingStatus.REJECTED:
         await this.notifyUser(
           booking.customer,
-          'Booking could not be taken',
-          `Booking ${ref} was declined by the organizer.`,
+          'Organizer declined your booking',
+          booking.declineReason
+            ? `Booking ${ref} was declined: ${booking.declineReason}`
+            : `Booking ${ref} was declined by the organizer.`,
+          `/booking-details/${booking._id.toString()}`,
         );
         break;
       default:
@@ -1361,9 +1508,12 @@ export class BookingService {
       .exec();
     if (!booking) throw new NotFoundException('Booking not found');
     if (
-      ![BookingStatus.PENDING, BookingStatus.CANCELLED, BookingStatus.REJECTED].includes(
-        booking.status,
-      )
+      ![
+        BookingStatus.PENDING,
+        BookingStatus.CANCELLED,
+        BookingStatus.REJECTED,
+        BookingStatus.EXPIRED,
+      ].includes(booking.status)
     ) {
       throw new ForbiddenException('Only a pending or closed booking can be deleted');
     }

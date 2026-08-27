@@ -53,6 +53,12 @@ export class InvitationController {
 
   @UseGuards(RolesGuard)
   @Roles(Role.CUSTOMER, Role.ADMIN)
+  /** Status of every invitation shared with this customer (My Events). */
+  @Get('mine')
+  listMine(@CurrentUser('userId') userId: string) {
+    return this.invitationService.listForCustomer(userId);
+  }
+
   @Get('mine/:bookingId')
   getForCustomer(@CurrentUser('userId') userId: string, @Param('bookingId') bookingId: string) {
     return this.invitationService.getForCustomer(userId, bookingId);

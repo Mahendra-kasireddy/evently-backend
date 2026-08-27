@@ -26,6 +26,19 @@ export class QuoteRequest {
   @Prop({ type: Types.ObjectId, ref: 'OrganizerProfile', default: null, index: true })
   organizer: Types.ObjectId | null;
 
+  /*
+   * The Plan wizard submission this request came from, when there is one.
+   *
+   * Without it, one real event existed as three unrelated records — a plan, a
+   * request and a booking — and My Events listed the same celebration three
+   * times under two different names with nothing saying they were the same
+   * thing. The booking already points at its request; this closes the chain
+   * back to the plan. Null for the Home hero's quick "Get quotes" draft, which
+   * never creates a plan document.
+   */
+  @Prop({ type: Types.ObjectId, ref: 'PlanSubmission', default: null, index: true })
+  plan: Types.ObjectId | null;
+
   // Captured from the hero draft (display strings, as the user picked them).
   @Prop({ required: true, trim: true })
   occasion: string;
@@ -33,7 +46,8 @@ export class QuoteRequest {
   @Prop({ trim: true, default: '' })
   when: string;
 
-  @Prop({ trim: true, default: '' })
+  /** "Area, City" — bounded to match RequestQuotesDto rather than left open. */
+  @Prop({ trim: true, default: '', maxlength: 120 })
   where: string;
 
   @Prop({ trim: true, default: '' })

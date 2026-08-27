@@ -38,6 +38,15 @@ export class AuthService {
   async verifyOtp(dto: VerifyOtpDto) {
     const phone = await this.otpService.verify(dto.requestId, dto.code);
     const { user, isNew } = await this.userService.findOrCreateByPhone(phone);
+    /*
+     * A suspended account must not get a session here either.
+     *
+     * This check used to exist only on password `login`, while OTP is the path
+     * almost every customer actually uses — so suspending an account from the
+     * admin console blocked nobody. The correct code for a suspended number is
+     * still a rejection.
+     */
+    this.assertActive(user);
     const tokens = await this.issueSession(user);
     return {
       token: tokens.accessToken,
@@ -62,9 +71,7 @@ export class AuthService {
     if (!user || !user.passwordHash || !(await bcrypt.compare(dto.password, user.passwordHash))) {
       throw new UnauthorizedException('Invalid credentials');
     }
-    if (user.status !== UserStatus.ACTIVE) {
-      throw new UnauthorizedException('Account is not active');
-    }
+    this.assertActive(user);
     return this.issueSession(user);
   }
 
@@ -74,6 +81,13 @@ export class AuthService {
     if (!user || !user.refreshTokenHash) {
       throw new UnauthorizedException('Session expired');
     }
+    /*
+     * Suspension has to bite here too. Without it a suspended user simply kept
+     * rotating their refresh token and stayed signed in indefinitely, because
+     * the only status check in the service ran at login — which they no longer
+     * needed to do.
+     */
+    this.assertActive(user);
     const matches = await bcrypt.compare(presentedToken, user.refreshTokenHash);
     if (!matches) {
       // Token reuse or theft — drop the session entirely.
@@ -94,7 +108,15 @@ export class AuthService {
    */
   async issueSessionForUser(userId: string): Promise<TokenPair> {
     const user = await this.userService.findById(userId);
+    this.assertActive(user);
     return this.issueSession(user);
+  }
+
+  /** One rule for "may this account hold a session", used by every entry point. */
+  private assertActive(user: UserDocument): void {
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException('Account is not active');
+    }
   }
 
   // ----- internals -----

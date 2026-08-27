@@ -6,13 +6,36 @@ export type BookingDocument = HydratedDocument<Booking>;
 
 /** Full booking lifecycle, beginning when a customer accepts a quotation. */
 export enum BookingStatus {
-  PENDING = 'pending', // created, awaiting organizer confirmation
+  PENDING = 'pending', // booking placed, advance not settled yet
+  AWAITING_ORGANIZER = 'awaiting_organizer', // advance paid, organizer must accept
   CONFIRMED = 'confirmed', // organizer accepted the booking
   IN_PROGRESS = 'in_progress', // event delivery underway
   COMPLETED = 'completed', // event delivered
   CANCELLED = 'cancelled', // cancelled by customer or organizer
-  REJECTED = 'rejected', // organizer could not take it
+  REJECTED = 'rejected', // organizer declined it
+  EXPIRED = 'expired', // organizer never answered inside the response window
 }
+
+/**
+ * What the customer has actually settled. Deliberately a second axis: a
+ * booking can be `ADVANCE_PAID` while still `AWAITING_ORGANIZER`, and folding
+ * the two into one field is what made the detail screen say "Pending" to a
+ * customer whose money had already left their account.
+ */
+export enum PaymentStatus {
+  UNPAID = 'unpaid',
+  ADVANCE_PAID = 'advance_paid',
+  PAID_IN_FULL = 'paid_in_full',
+}
+
+/** Booking states that still need the organizer to answer. */
+export const AWAITING_ORGANIZER_STATUSES = [
+  BookingStatus.PENDING,
+  BookingStatus.AWAITING_ORGANIZER,
+];
+
+/** Hours the organizer has to accept or decline before the booking expires. */
+export const ORGANIZER_RESPONSE_WINDOW_HOURS = 48;
 
 /** Statuses considered an ongoing/active booking (drives the home card). */
 export const ONGOING_BOOKING_STATUSES = [BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS];
@@ -154,6 +177,33 @@ export class Booking {
 
   @Prop({ type: String, enum: BookingStatus, default: BookingStatus.PENDING, index: true })
   status: BookingStatus;
+
+  // ---- Payment axis (independent of `status`) ----
+
+  @Prop({ type: String, enum: PaymentStatus, default: PaymentStatus.UNPAID, index: true })
+  paymentStatus: PaymentStatus;
+
+  // Snapshot of the accepted quotation's advance share, so a later edit to the
+  // quotation can never change what this booking says the customer was charged.
+  @Prop({ default: 30, min: 0, max: 100 })
+  advancePercentage: number;
+
+  @Prop({ default: 0, min: 0 })
+  advanceAmount: number;
+
+  @Prop({ default: 0, min: 0 })
+  amountPaid: number;
+
+  @Prop({ type: Date })
+  advancePaidAt?: Date;
+
+  // Deadline for the organizer to accept/decline; past it the booking expires.
+  @Prop({ type: Date })
+  organizerRespondBy?: Date;
+
+  // Organizer's stated reason when declining — shown to the customer.
+  @Prop({ trim: true, default: '', maxlength: 500 })
+  declineReason: string;
 
   // Provided by { timestamps: true } — declared so they are typed on the document.
   createdAt?: Date;

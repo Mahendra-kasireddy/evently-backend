@@ -26,6 +26,8 @@ import { UploadModule } from './modules/upload/upload.module';
 import { SubvendorModule } from './modules/subvendor/subvendor.module';
 import { InvitationModule } from './modules/invitation/invitation.module';
 import { IdeaModule } from './modules/idea/idea.module';
+import { ContactModule } from './modules/contact/contact.module';
+import { AdminModule } from './modules/admin/admin.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 
 @Module({
@@ -77,6 +79,8 @@ import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
     SubvendorModule,
     InvitationModule,
     IdeaModule,
+    ContactModule,
+    AdminModule,
     // ChatModule — still a stub
   ],
   providers: [

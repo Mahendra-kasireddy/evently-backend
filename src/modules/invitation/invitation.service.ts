@@ -200,6 +200,28 @@ export class InvitationService {
   // ---------------------------------------------------------------------------
 
   /** The customer's view of their own invitation — only once it has been sent. */
+  /**
+   * Every invitation shared with this customer, as `{ bookingId, status }`.
+   *
+   * My Events needs to know which bookings are waiting on the customer to
+   * approve an invitation before it can decide which tab each event belongs
+   * in. One query for the whole list, rather than one request per card.
+   * Drafts are excluded — the customer cannot see them.
+   */
+  async listForCustomer(userId: string): Promise<Array<{ bookingId: string; status: string }>> {
+    const invitations = await this.invitationModel
+      .find({
+        customer: new Types.ObjectId(userId),
+        status: { $ne: InvitationStatus.DRAFT },
+      })
+      .select('booking status')
+      .exec();
+    return invitations.map((i) => ({
+      bookingId: i.booking.toString(),
+      status: i.status,
+    }));
+  }
+
   async getForCustomer(userId: string, bookingId: string): Promise<Record<string, unknown>> {
     const booking = await this.customerBooking(userId, bookingId);
     const invitation = await this.sharedInvitation(booking);

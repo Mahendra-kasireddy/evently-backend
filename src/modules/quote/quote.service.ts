@@ -221,6 +221,7 @@ export class QuoteService {
     return this.quoteModel.create({
       customer: new Types.ObjectId(userId),
       organizer: null,
+      plan: dto.planId ? new Types.ObjectId(dto.planId) : null,
       occasion: dto.occasion,
       when: dto.when ?? '',
       where: dto.where ?? '',
@@ -239,6 +240,7 @@ export class QuoteService {
     const quote = await this.quoteModel.create({
       customer: new Types.ObjectId(userId),
       organizer: new Types.ObjectId(dto.organizerId),
+      plan: dto.planId ? new Types.ObjectId(dto.planId) : null,
       occasion: dto.occasion,
       when: dto.when ?? '',
       where: dto.where ?? '',
@@ -329,6 +331,9 @@ export class QuoteService {
       const responses = byRequest.get(r._id.toString()) ?? [];
       return {
         ...(r.toJSON() as Record<string, unknown>),
+        // Explicit and stringified: My Events joins plan → request → booking on
+        // this, and a raw ObjectId would not survive the client comparison.
+        planId: r.plan ? r.plan.toString() : null,
         responses,
         quotationCount: responses.length,
         lastQuotedAt: responses[0]?.sentAt ?? null,
@@ -435,6 +440,8 @@ export class QuoteService {
     when: string;
     where: string;
     guests: string;
+    advancePercentage: number;
+    advanceAmount: number;
   }> {
     const q = await this.quotationModel
       .findOne({ _id: this.toObjectId(quotationId), customer: new Types.ObjectId(userId) })
@@ -454,6 +461,8 @@ export class QuoteService {
       when: request?.when ?? '',
       where: request?.where ?? '',
       guests: request?.guests ?? '',
+      advancePercentage: q.advancePercentage,
+      advanceAmount: Math.round((q.grandTotal * q.advancePercentage) / 100),
     };
   }
 
