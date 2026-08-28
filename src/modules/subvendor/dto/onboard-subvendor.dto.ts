@@ -1,4 +1,15 @@
-import { IsEnum, IsOptional, IsString, Matches, Max, Min, MinLength } from 'class-validator';
+import {
+  IsEnum,
+  IsOptional,
+  IsString,
+  Matches,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
+  ValidateIf,
+} from 'class-validator';
+import { Transform } from 'class-transformer';
 import { Type } from 'class-transformer';
 import { SubVendorCategory } from '../schemas/subvendor-profile.schema';
 
@@ -9,6 +20,18 @@ export class OnboardSubvendorDto {
 
   @IsEnum(SubVendorCategory)
   categoryId: SubVendorCategory;
+
+  /**
+   * Required only when the vendor picked "Other" — there is no point storing a
+   * category of "other" with nothing to say what it actually is. Ignored for
+   * every other category, so a stale value can't linger on the profile.
+   */
+  @ValidateIf((o: OnboardSubvendorDto) => o.categoryId === SubVendorCategory.OTHER)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MinLength(2, { message: 'Tell us what you do, in a couple of words' })
+  @MaxLength(60, { message: 'Keep it under 60 characters' })
+  customCategory?: string;
 
   @IsOptional()
   @IsString()

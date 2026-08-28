@@ -1,10 +1,11 @@
-import { Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { SubvendorService } from './subvendor.service';
 import {
   OnboardSubvendorDto,
   InviteSubvendorDto,
   RateSubvendorDto,
 } from './dto/onboard-subvendor.dto';
+import { UpdateSubVendorProfileDto } from './dto/update-subvendor-profile.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -29,6 +30,13 @@ export class SubvendorController {
   }
 
   @UseGuards(RolesGuard)
+  /** Update your own rate card, service area and availability. */
+  @Roles(Role.VENDOR, Role.ADMIN)
+  @Patch('profile')
+  updateProfile(@CurrentUser('userId') userId: string, @Body() dto: UpdateSubVendorProfileDto) {
+    return this.subvendorService.updateOwnProfile(userId, dto);
+  }
+
   @Roles(Role.VENDOR, Role.ADMIN)
   @Get('my-organizers')
   myOrganizers(@CurrentUser('userId') userId: string) {

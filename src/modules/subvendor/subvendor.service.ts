@@ -12,6 +12,7 @@ import {
   SubVendorLinkStatus,
 } from './schemas/subvendor-link.schema';
 import { OnboardSubvendorDto } from './dto/onboard-subvendor.dto';
+import { UpdateSubVendorProfileDto } from './dto/update-subvendor-profile.dto';
 import { UserService } from '../user/user.service';
 import { OrganizerService } from '../organizer/organizer.service';
 import { AuthService } from '../auth/auth.service';
@@ -28,6 +29,9 @@ const CATEGORY_UNIT: Record<SubVendorCategory, string> = {
   [SubVendorCategory.TRANSPORT]: 'trip',
   [SubVendorCategory.PRIEST]: 'ceremony',
   [SubVendorCategory.MEHENDI]: 'hand',
+  // A trade we don't have a category for yet has no known unit of sale, so the
+  // rate card asks for a generic one rather than guessing "plate" or "hour".
+  [SubVendorCategory.OTHER]: 'job',
 };
 
 export interface SubVendorProfileView {
@@ -36,10 +40,14 @@ export interface SubVendorProfileView {
   initials: string;
   avatarColor: string;
   category: SubVendorCategory;
+  /** The vendor's own words, when `category` is OTHER. Empty otherwise. */
+  customCategory: string;
   serviceArea: string;
   baseRate: number;
   baseRateUnit: string;
   minOrder: number;
+  /** Whether the vendor is currently taking work. Organizers' pickers respect it. */
+  active: boolean;
 }
 
 export interface OrganizerRef {
@@ -77,10 +85,12 @@ export class SubvendorService {
       initials: doc.initials,
       avatarColor: doc.avatarColor,
       category: doc.category,
+      customCategory: doc.customCategory ?? '',
       serviceArea: doc.serviceArea,
       baseRate: doc.baseRate,
       baseRateUnit: doc.baseRateUnit,
       minOrder: doc.minOrder,
+      active: doc.active,
     };
   }
 
@@ -106,6 +116,32 @@ export class SubvendorService {
     const doc = await this.subVendorModel.findById(id).exec();
     if (!doc) throw new NotFoundException('Sub-vendor not found');
     return doc;
+  }
+
+  /**
+   * Update the caller's own profile.
+   *
+   * Scoped by `user`, not by a profile id from the request — a vendor cannot
+   * name someone else's profile and edit their rate card. Only the fields the
+   * DTO declares can be written; see UpdateSubVendorProfileDto for why
+   * category and name are not among them.
+   */
+  async updateOwnProfile(
+    userId: string,
+    dto: UpdateSubVendorProfileDto,
+  ): Promise<SubVendorProfileView> {
+    const profile = await this.findByUser(userId);
+    if (!profile) {
+      throw new ForbiddenException('No sub-vendor profile is linked to your account');
+    }
+
+    if (dto.serviceArea !== undefined) profile.serviceArea = dto.serviceArea;
+    if (dto.baseRate !== undefined) profile.baseRate = dto.baseRate;
+    if (dto.minOrder !== undefined) profile.minOrder = dto.minOrder;
+    if (dto.active !== undefined) profile.active = dto.active;
+
+    await profile.save();
+    return this.toView(profile);
   }
 
   private async profileId(userId: string): Promise<Types.ObjectId> {
@@ -134,6 +170,14 @@ export class SubvendorService {
         fullName: dto.fullName || user.name || 'New sub-vendor',
         initials: this.initialsOf(dto.fullName || user.name || 'SV'),
         category: dto.categoryId,
+        /*
+         * Only kept for OTHER. Storing the vendor's words alongside a real
+         * category would let the two disagree, and whichever one a screen
+         * happened to read would look like a bug.
+         */
+        customCategory:
+          dto.categoryId === SubVendorCategory.OTHER ? (dto.customCategory ?? '').trim() : '',
+        customCategoryResolved: false,
         serviceArea: dto.serviceArea ?? '',
         baseRate: dto.baseRate ?? 0,
         baseRateUnit: CATEGORY_UNIT[dto.categoryId],

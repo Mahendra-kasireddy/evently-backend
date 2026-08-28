@@ -10,6 +10,7 @@ import {
 import {
   SubVendorProfile,
   SubVendorProfileDocument,
+  SubVendorCategory,
 } from '../subvendor/schemas/subvendor-profile.schema';
 import {
   QuoteRequest,
@@ -86,6 +87,7 @@ export class AdminDashboardService {
       organizersSubmitted,
       vendors,
       vendorsInactive,
+      vendorCategoryRequests,
       events,
       eventsQuoted,
       bookings,
@@ -101,6 +103,13 @@ export class AdminDashboardService {
       this.organizerModel.countDocuments({ status: OnboardingStatus.SUBMITTED }).exec(),
       this.vendorModel.countDocuments().exec(),
       this.vendorModel.countDocuments({ active: false }).exec(),
+      this.vendorModel
+        .countDocuments({
+          category: SubVendorCategory.OTHER,
+          customCategory: { $nin: ['', null] },
+          customCategoryResolved: false,
+        })
+        .exec(),
       this.requestModel.countDocuments().exec(),
       this.requestModel.countDocuments({ status: QuoteRequestStatus.QUOTED }).exec(),
       this.bookingModel.countDocuments().exec(),
@@ -115,7 +124,14 @@ export class AdminDashboardService {
     const sections: DashboardSection[] = [
       { key: 'users', label: 'Users', total: users, attention: suspendedUsers },
       { key: 'organizers', label: 'Organizers', total: organizers, attention: organizersToReview },
-      { key: 'vendors', label: 'Vendors', total: vendors, attention: vendorsInactive },
+      {
+        key: 'vendors',
+        label: 'Vendors',
+        total: vendors,
+        // Category requests are the actionable number here; an inactive vendor
+        // is a settled state, not a queue.
+        attention: vendorCategoryRequests || vendorsInactive,
+      },
       { key: 'events', label: 'Events', total: events, attention: eventsQuoted },
       { key: 'bookings', label: 'Bookings', total: bookings, attention: bookingsAwaiting },
       { key: 'contact', label: 'Messages', total: contacts, attention: contactsNew },

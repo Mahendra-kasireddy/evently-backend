@@ -28,6 +28,15 @@ export class AdminSubvendorController {
     return this.adminSubvendorService.detail(id);
   }
 
+  /**
+   * Mark a vendor's "Other" category suggestion as dealt with. It does not
+   * create a category — that is an enum change in code.
+   */
+  @Patch('resolveCategoryRequest/:id')
+  resolveCategoryRequest(@Param('id') id: string) {
+    return this.adminSubvendorService.resolveCategoryRequest(id);
+  }
+
   /** Take a vendor off the roster (or put them back). */
   @Patch('updateActive/:id')
   updateActive(@Param('id') id: string, @Body() dto: UpdateSubVendorActiveDto) {

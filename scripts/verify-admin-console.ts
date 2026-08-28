@@ -188,9 +188,11 @@ async function main() {
   ]);
 
   const vendorId = oid();
+  const otherVendorId = oid();
   const vendors = collection([
     doc({ _id: vendorId, user: vendorUserId, fullName: 'Suresh Catering', initials: 'SC', avatarColor: '#1d9e75', category: 'food', serviceArea: 'Kukatpally', baseRate: 450, baseRateUnit: 'plate', minOrder: 100, active: true }),
     doc({ user: oid(), fullName: 'Bloom Decor', initials: 'BD', avatarColor: '#7c5bd6', category: 'decor', serviceArea: 'Madhapur', baseRate: 0, baseRateUnit: '', minOrder: 0, active: false }),
+    doc({ _id: otherVendorId, user: oid(), fullName: 'Anil Balloons', initials: 'AB', avatarColor: '#e8633a', category: 'other', customCategory: 'Balloon artist', customCategoryResolved: false, serviceArea: 'Gachibowli', baseRate: 3000, baseRateUnit: 'job', minOrder: 0, active: true }),
   ]);
 
   const links = collection([
@@ -301,7 +303,8 @@ async function main() {
   console.log('\nVENDORS');
 
   const vList = await call('/admin/subvendor/getSubVendors', { token: adminToken });
-  check('admin can list vendors', vList.status === 200 && vList.json.meta.total === 2);
+  check('admin can list vendors', vList.status === 200 && vList.json.meta.total === 3,
+    `status ${vList.status}, total ${vList.json?.meta?.total}`);
   const vRow = vList.json.data.find((r: any) => r.id === vendorId.toString());
   check('row carries the category label', vRow?.categoryLabel === 'Food & catering', String(vRow?.categoryLabel));
   check('row carries a live organizer count', vRow?.organizerCount === 1, String(vRow?.organizerCount));
@@ -314,7 +317,9 @@ async function main() {
   check('an invented category is rejected', vBad.status === 400, `got ${vBad.status}`);
 
   const vCounts = await call('/admin/subvendor/getStatusCounts', { token: adminToken });
-  check('vendor counts are real', vCounts.json.all === 2 && vCounts.json.active === 1 && vCounts.json.food === 1,
+  check('vendor counts are real',
+    vCounts.json.all === 3 && vCounts.json.active === 2 && vCounts.json.inactive === 1 &&
+    vCounts.json.food === 1 && vCounts.json.other === 1,
     JSON.stringify(vCounts.json));
 
   const vDetail = await call(`/admin/subvendor/getSubVendorById/${vendorId}`, { token: adminToken });
@@ -332,6 +337,45 @@ async function main() {
   });
   check('admin can take a vendor off the roster', toggled.json?.active === false);
   check('the change is persisted', vendors._store.get(vendorId.toString()).active === false);
+
+  console.log('\nVENDORS — custom category');
+
+  const otherRow = (await call('/admin/subvendor/getSubVendors?category=other', { token: adminToken }))
+    .json.data[0];
+  check('an "other" vendor is listed under the other category', otherRow?.id === otherVendorId.toString());
+  check(
+    'the label shows the vendor\'s own words, not "Other"',
+    otherRow?.categoryLabel === 'Balloon artist',
+    String(otherRow?.categoryLabel),
+  );
+  check('the raw enum value is still sent for filtering', otherRow?.category === 'other');
+  check('an unresolved suggestion is flagged as an open request', otherRow?.categoryRequestOpen === true);
+
+  const vCounts2 = await call('/admin/subvendor/getStatusCounts', { token: adminToken });
+  check('open category requests are counted', vCounts2.json.categoryRequests === 1,
+    String(vCounts2.json.categoryRequests));
+
+  check(
+    'a customer cannot resolve a category request',
+    (await call(`/admin/subvendor/resolveCategoryRequest/${otherVendorId}`, {
+      method: 'PATCH', token: customerToken,
+    })).status === 403,
+  );
+
+  const resolved = await call(`/admin/subvendor/resolveCategoryRequest/${otherVendorId}`, {
+    method: 'PATCH', token: adminToken,
+  });
+  check('admin can resolve the request', resolved.json?.categoryRequestOpen === false,
+    String(resolved.json?.categoryRequestOpen));
+  check('resolving is persisted', vendors._store.get(otherVendorId.toString()).customCategoryResolved === true);
+  check(
+    'resolving does not move the vendor into another category',
+    vendors._store.get(otherVendorId.toString()).category === 'other',
+  );
+  check(
+    'the request drops out of the count once resolved',
+    (await call('/admin/subvendor/getStatusCounts', { token: adminToken })).json.categoryRequests === 0,
+  );
 
   console.log('\nEVENTS');
 
@@ -392,7 +436,7 @@ async function main() {
   check('organizers count is real', section('organizers')?.total === 3);
   check('organizers attention counts both review gates', section('organizers')?.attention === 2,
     String(section('organizers')?.attention));
-  check('vendors count is real', section('vendors')?.total === 2);
+  check('vendors count is real', section('vendors')?.total === 3, String(section('vendors')?.total));
   check('events count is real', section('events')?.total === 2);
   check('bookings count is real', section('bookings')?.total === 2);
   check('messages attention counts only new', section('contact')?.attention === 1);

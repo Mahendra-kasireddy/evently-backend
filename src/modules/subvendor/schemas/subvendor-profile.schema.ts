@@ -14,6 +14,13 @@ export enum SubVendorCategory {
   TRANSPORT = 'transport',
   PRIEST = 'priest',
   MEHENDI = 'mehendi',
+  /**
+   * A trade Evently does not have a category for yet. The vendor's own words
+   * live in `customCategory`; this stays a real enum member so organizer
+   * vendor-matching, the rate-card unit and the admin roster filters all keep
+   * working instead of being handed an unknown string.
+   */
+  OTHER = 'other',
 }
 
 @Schema({
@@ -49,6 +56,22 @@ export class SubVendorProfile {
 
   @Prop({ default: 0, min: 0 })
   minOrder: number;
+
+  /**
+   * What the vendor called their trade, when `category` is OTHER. Empty for
+   * every other category, so it can never disagree with the enum.
+   */
+  @Prop({ trim: true, default: '', maxlength: 60 })
+  customCategory: string;
+
+  /**
+   * Cleared once an admin has dealt with the suggestion — either by adding a
+   * real category or deciding not to. Until then the request sits in the admin
+   * console, so a vendor asking for a category nobody can filter by is
+   * visible rather than silently unmatchable.
+   */
+  @Prop({ default: false, index: true })
+  customCategoryResolved: boolean;
 
   @Prop({ default: true, index: true })
   active: boolean;

@@ -25,6 +25,7 @@ export const CATEGORY_LABEL: Record<SubVendorCategory, string> = {
   [SubVendorCategory.TRANSPORT]: 'Transport',
   [SubVendorCategory.PRIEST]: 'Priest',
   [SubVendorCategory.MEHENDI]: 'Mehendi',
+  [SubVendorCategory.OTHER]: 'Other',
 };
 
 /**
@@ -110,7 +111,34 @@ export class AdminSubvendorService {
     const counts: Record<string, number> = { all, active, inactive: all - active };
     for (const c of Object.values(SubVendorCategory)) counts[c] = 0;
     for (const g of byCategory) counts[g._id] = g.n;
+    counts.categoryRequests = await this.openCategoryRequestCount();
     return counts;
+  }
+
+  /** Vendors waiting on Evently to add a category for the trade they named. */
+  openCategoryRequestCount(): Promise<number> {
+    return this.profileModel
+      .countDocuments({
+        category: SubVendorCategory.OTHER,
+        customCategory: { $nin: ['', null] },
+        customCategoryResolved: false,
+      })
+      .exec();
+  }
+
+  /**
+   * Mark a category suggestion as dealt with.
+   *
+   * It does not move the vendor into a new category — adding one means editing
+   * the `SubVendorCategory` enum and shipping, which is a code change, not a
+   * console action. This only clears the request from the queue so the same
+   * suggestion isn't worked twice.
+   */
+  async resolveCategoryRequest(id: string): Promise<Record<string, unknown>> {
+    const profile = await this.load(id);
+    profile.customCategoryResolved = true;
+    await profile.save();
+    return this.detail(profile._id.toString());
   }
 
   /** One vendor: profile, the account behind it, its organizers and its work. */
@@ -201,7 +229,19 @@ export class AdminSubvendorService {
       initials: p.initials,
       avatarColor: p.avatarColor,
       category: p.category,
-      categoryLabel: CATEGORY_LABEL[p.category] ?? p.category,
+      /*
+       * For OTHER the vendor's own words are the useful label — "Other" tells
+       * an admin nothing. The raw `category` is still sent, so filters and
+       * tone-mapping keep working off the enum.
+       */
+      categoryLabel:
+        p.category === SubVendorCategory.OTHER && p.customCategory
+          ? p.customCategory
+          : (CATEGORY_LABEL[p.category] ?? p.category),
+      customCategory: p.customCategory ?? '',
+      /** True while an admin has not yet dealt with this suggestion. */
+      categoryRequestOpen:
+        p.category === SubVendorCategory.OTHER && !!p.customCategory && !p.customCategoryResolved,
       serviceArea: p.serviceArea,
       baseRate: p.baseRate,
       baseRateUnit: p.baseRateUnit,
