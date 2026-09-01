@@ -65,6 +65,18 @@ function daysBefore(day: string, days: number): string {
  * organizer and signed off by the customer — only an approved invitation has
  * a live guest link.
  */
+/** One row per invitation the customer can see — enough to identify it. */
+export interface InvitationSummary {
+  bookingId: string;
+  status: string;
+  bookingTitle: string;
+  bookingRef: string;
+  occasion: string;
+  eventDate: Date | null;
+  sentAt: Date | null;
+  approvedAt: Date | null;
+}
+
 @Injectable()
 export class InvitationService {
   private readonly logger = new Logger(InvitationService.name);
@@ -208,18 +220,41 @@ export class InvitationService {
    * in. One query for the whole list, rather than one request per card.
    * Drafts are excluded — the customer cannot see them.
    */
-  async listForCustomer(userId: string): Promise<Array<{ bookingId: string; status: string }>> {
+  async listForCustomer(userId: string): Promise<InvitationSummary[]> {
     const invitations = await this.invitationModel
       .find({
         customer: new Types.ObjectId(userId),
         status: { $ne: InvitationStatus.DRAFT },
       })
-      .select('booking status')
+      .select('booking status sentAt approvedAt')
+      /*
+       * The booking names the invitation. Without it every row in a list reads
+       * "Guest invitation" and the customer cannot tell one from another —
+       * this list originally served only My Events' tab logic, which needed
+       * nothing but the id and the status.
+       */
+      .populate('booking', 'title ref occasion eventDate')
       .exec();
-    return invitations.map((i) => ({
-      bookingId: i.booking.toString(),
-      status: i.status,
-    }));
+
+    return invitations.map((i) => {
+      const booking = i.booking as unknown as {
+        _id: Types.ObjectId;
+        title?: string;
+        ref?: string;
+        occasion?: string;
+        eventDate?: Date;
+      };
+      return {
+        bookingId: booking._id.toString(),
+        status: i.status,
+        bookingTitle: booking.title ?? '',
+        bookingRef: booking.ref ?? '',
+        occasion: booking.occasion ?? '',
+        eventDate: booking.eventDate ?? null,
+        sentAt: i.sentAt ?? null,
+        approvedAt: i.approvedAt ?? null,
+      };
+    });
   }
 
   async getForCustomer(userId: string, bookingId: string): Promise<Record<string, unknown>> {

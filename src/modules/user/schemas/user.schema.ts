@@ -8,7 +8,40 @@ export type UserDocument = HydratedDocument<User>;
 export enum UserStatus {
   ACTIVE = 'active',
   SUSPENDED = 'suspended',
+  /**
+   * The account holder asked for it to be closed. Kept rather than removed:
+   * their bookings, payments and messages reference this user, and deleting
+   * the row would leave an organizer's paid booking pointing at nothing.
+   * `AuthService.assertActive` refuses to issue a session for it.
+   */
+  DELETED = 'deleted',
 }
+
+/**
+ * What the customer has chosen to be told about.
+ *
+ * Checked by NotificationService before a notification is written, so turning
+ * one off actually stops it — a stored preference nothing reads is worse than
+ * no preference at all. Booking and payment notices are deliberately absent:
+ * they are the record of money moving and a commitment made, which is not a
+ * marketing choice.
+ */
+@Schema({ _id: false })
+export class NotificationPrefs {
+  /** Quotes arriving from organizers. */
+  @Prop({ default: true })
+  quotes: boolean;
+
+  /** Invitations shared for the customer's approval. */
+  @Prop({ default: true })
+  invitations: boolean;
+
+  /** Ideas, tips and offers. Off unless asked for. */
+  @Prop({ default: false })
+  marketing: boolean;
+}
+
+export const NotificationPrefsSchema = SchemaFactory.createForClass(NotificationPrefs);
 
 @Schema({
   timestamps: true,
@@ -50,6 +83,13 @@ export class User {
   // Hash of the current refresh token; null once logged out. Never returned to clients.
   @Prop({ type: String, default: null, select: false })
   refreshTokenHash: string | null;
+
+  @Prop({ type: NotificationPrefsSchema, default: () => ({}) })
+  notificationPrefs: NotificationPrefs;
+
+  /** When the account holder asked for it to be closed. */
+  @Prop({ type: Date, default: null })
+  deletedAt?: Date | null;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

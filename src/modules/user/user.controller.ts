@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Param, Patch, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { UserService } from './user.service';
 import { UpdateProfileDto, UpdateUserDto } from './dto/update-user.dto';
+import { UpdatePreferencesDto } from './dto/update-preferences.dto';
 import { CurrentUser, AuthUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -34,6 +35,28 @@ export class UserController {
   @Patch('updateProfile')
   updateProfile(@CurrentUser() user: AuthUser, @Body() dto: UpdateProfileDto) {
     return this.userService.update(user.userId, dto);
+  }
+
+  /** The customer's own notification choices. */
+  @Get('preferences')
+  getPreferences(@CurrentUser('userId') userId: string) {
+    return this.userService.getNotificationPrefs(userId);
+  }
+
+  /** Change them. Scoped to the signed-in account; ids are never accepted. */
+  @Patch('preferences')
+  updatePreferences(@CurrentUser('userId') userId: string, @Body() dto: UpdatePreferencesDto) {
+    return this.userService.updateNotificationPrefs(userId, dto);
+  }
+
+  /**
+   * Closes the signed-in account. Required by both app stores, and deliberately
+   * only ever acts on the caller's own account — there is no id parameter to
+   * point at somebody else's.
+   */
+  @Post('close-account')
+  closeAccount(@CurrentUser('userId') userId: string) {
+    return this.userService.closeOwnAccount(userId);
   }
 
   @Get('getUserById/:id')

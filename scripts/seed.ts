@@ -334,7 +334,11 @@ const customerHomeContent = {
     headingTail: ' next?',
     subtitle:
       'Tell us the occasion — verified organizers send tailored quotes within a day. You compare, you choose, they handle everything.',
-    draftLabel: 'YOUR EVENT SO FAR · TAP TO EDIT',
+    // The values under this label are the planner's starting selection - the
+    // same for every account - so it must read as a prompt, not as a record of
+    // what this customer has already told us. Their real event is shown from
+    // their own plan/request/booking instead.
+    draftLabel: 'PLAN YOUR EVENT · TAP TO CHOOSE',
     defaultDraft: { occasion: 'Wedding', when: '28 Dec', where: 'Hyderabad', guests: '300' },
     options: {
       occasion: ['Wedding', 'Birthday', 'Housewarming', 'Naming ceremony', 'Anniversary', 'Corporate'],

@@ -53,6 +53,14 @@ export interface QuoteResponseSummary {
 export interface LatestQuoteSummary {
   id: string;
   occasion: string;
+  /**
+   * The brief's own words for date, place and headcount. Each is '' when the
+   * customer left it out, never a filled-in default — the Home card shows
+   * these verbatim and must not present a guess as the customer's answer.
+   */
+  when: string;
+  where: string;
+  guests: string;
   status: QuoteRequestStatus;
   quoteCount: number;
   acceptedQuotationId: string | null;
@@ -379,12 +387,37 @@ export class QuoteService {
     return {
       id: request._id.toString(),
       occasion: request.occasion,
+      when: request.when,
+      where: request.where,
+      guests: request.guests,
       status: request.status,
       quoteCount: quotations.length,
       acceptedQuotationId: accepted?._id.toString() ?? null,
       organizer: toOrganizerRef(organizerDoc),
       createdAt: request.createdAt,
       updatedAt: request.updatedAt,
+    };
+  }
+
+  /**
+   * The four facts a brief carries, by request id, with no ownership check —
+   * callers must already hold a record that references this request (a
+   * Booking, for instance). It returns nothing but the customer's own words,
+   * so it exposes no organizer or pricing detail.
+   */
+  async getRequestBrief(
+    requestId: string,
+  ): Promise<{ occasion: string; when: string; where: string; guests: string } | null> {
+    const request = await this.quoteModel
+      .findById(this.toObjectId(requestId))
+      .select('occasion when where guests')
+      .exec();
+    if (!request) return null;
+    return {
+      occasion: request.occasion ?? '',
+      when: request.when ?? '',
+      where: request.where ?? '',
+      guests: request.guests ?? '',
     };
   }
 

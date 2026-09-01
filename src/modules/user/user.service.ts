@@ -3,9 +3,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as bcrypt from 'bcryptjs';
 
-import { User, UserDocument } from './schemas/user.schema';
+import { NotificationPrefs, User, UserDocument, UserStatus } from './schemas/user.schema';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdatePreferencesDto } from './dto/update-preferences.dto';
 import { Role } from '../../common/enums/role.enum';
 
 const BCRYPT_ROUNDS = 12;
@@ -40,6 +41,61 @@ export class UserService {
     const user = await this.userModel.findById(id).exec();
     if (!user) throw new NotFoundException('User not found');
     return user;
+  }
+
+  /**
+   * The customer's notification choices. Defaults are applied for a document
+   * written before the field existed, so a legacy account is opted in to the
+   * two it would expect and out of marketing.
+   */
+  async getNotificationPrefs(
+    userId: string,
+  ): Promise<{ quotes: boolean; invitations: boolean; marketing: boolean }> {
+    const user = await this.findById(userId);
+    const prefs = user.notificationPrefs ?? ({} as Partial<NotificationPrefs>);
+    return {
+      quotes: prefs.quotes !== false,
+      invitations: prefs.invitations !== false,
+      marketing: prefs.marketing === true,
+    };
+  }
+
+  /** Updates only the flags supplied; the rest keep their current value. */
+  async updateNotificationPrefs(userId: string, dto: UpdatePreferencesDto): Promise<UserDocument> {
+    const current = await this.getNotificationPrefs(userId);
+    const next = {
+      quotes: dto.quotes ?? current.quotes,
+      invitations: dto.invitations ?? current.invitations,
+      marketing: dto.marketing ?? current.marketing,
+    };
+    const updated = await this.userModel
+      .findByIdAndUpdate(userId, { notificationPrefs: next }, { new: true })
+      .exec();
+    if (!updated) throw new NotFoundException('User not found');
+    return updated;
+  }
+
+  /**
+   * Closes the account at its holder's request.
+   *
+   * A soft close, not a row delete: bookings, payments and messages reference
+   * this user, and removing it would leave an organizer's paid booking
+   * pointing at nothing. The session is revoked here, and `assertActive`
+   * refuses to issue another — so the account is unreachable from this moment
+   * even though the record survives for the events that depend on it.
+   */
+  async closeOwnAccount(userId: string): Promise<{ closed: true }> {
+    const user = await this.findById(userId);
+    if (user.status === UserStatus.DELETED) return { closed: true };
+
+    await this.userModel
+      .findByIdAndUpdate(userId, {
+        status: UserStatus.DELETED,
+        deletedAt: new Date(),
+        refreshTokenHash: null,
+      })
+      .exec();
+    return { closed: true };
   }
 
   /** Compact profile for the home header/greeting: name, initials, location. */

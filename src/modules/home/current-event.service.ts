@@ -69,6 +69,16 @@ export interface CurrentEvent {
   source: 'plan' | 'quote' | 'booking';
   title: string;
   occasion: string;
+  /**
+   * The three remaining facts the Home card shows. Each comes straight from
+   * the underlying record — a booking's fixed date and venue, or the brief's
+   * own words — and is '' when that record does not carry it. The card renders
+   * these verbatim, so a placeholder here would read to the customer as their
+   * own answer.
+   */
+  when: string;
+  where: string;
+  guests: string;
   progress: number;
   daysToGo: number | null;
   organizer: OrganizerRef | null;
@@ -78,6 +88,18 @@ export interface CurrentEvent {
   quotationId: string | null;
   /** True when the customer has unread notifications (new activity badge). */
   hasNewActivity: boolean;
+}
+
+/**
+ * A booking's fixed date, spelled out the way the customer sees it elsewhere
+ * in the app ("12 December 2026"). Returns '' rather than a placeholder when
+ * the record has no date.
+ */
+function bookingDateLabel(date: Date | undefined): string {
+  if (!date) return '';
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
 /** Titleize an occasion slug/label for display, e.g. "wedding" → "Wedding". */
@@ -147,7 +169,10 @@ export class CurrentEventService {
       refCode: b.ref,
       source: 'booking',
       title: b.title || titleizeOccasion(undefined),
-      occasion: '',
+      occasion: b.occasion ? titleizeOccasion(b.occasion) : '',
+      when: bookingDateLabel(b.eventDate),
+      where: b.location,
+      guests: b.guests,
       // A booking carries its own stored progress; never let the card regress
       // below the canonical floor for its stage.
       progress: Math.max(b.progress ?? 0, STAGE_PROGRESS[stage]),
@@ -169,7 +194,10 @@ export class CurrentEventService {
       refCode: null,
       source: 'quote',
       title: titleizeOccasion(q.occasion),
-      occasion: q.occasion,
+      occasion: titleizeOccasion(q.occasion),
+      when: q.when,
+      where: q.where,
+      guests: q.guests,
       progress: STAGE_PROGRESS[stage],
       daysToGo: null,
       organizer: q.organizer,
@@ -191,7 +219,12 @@ export class CurrentEventService {
       refCode: p.planCode ?? null,
       source: 'plan',
       title: titleizeOccasion(p.occasion),
-      occasion: p.occasion,
+      occasion: titleizeOccasion(p.occasion),
+      when: bookingDateLabel(p.eventDate),
+      // The wizard collects these separately; joined the way the plan card
+      // already renders them, and left blank when neither was filled in.
+      where: [p.area, p.city].filter(Boolean).join(', '),
+      guests: p.guests ?? '',
       progress: STAGE_PROGRESS[stage],
       daysToGo: null,
       organizer: null,

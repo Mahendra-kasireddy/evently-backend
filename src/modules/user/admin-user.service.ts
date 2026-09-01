@@ -13,6 +13,9 @@ import { PlanSubmission, PlanSubmissionDocument } from '../plan/schemas/plan-sub
 export const USER_STATUS_LABEL: Record<UserStatus, string> = {
   [UserStatus.ACTIVE]: 'Active',
   [UserStatus.SUSPENDED]: 'Suspended',
+  // Closed by its holder, not by an admin — the console shows it, and the
+  // suspend/reinstate controls do not apply to it.
+  [UserStatus.DELETED]: 'Closed by user',
 };
 
 export const ROLE_LABEL: Record<Role, string> = {

@@ -80,6 +80,16 @@ export interface LatestBookingSummary {
   ref: string;
   title: string;
   description: string;
+  /** The booking's own occasion, location and fixed date. */
+  occasion: string;
+  location: string;
+  eventDate: Date | undefined;
+  /**
+   * Guest count, read from the quote request this booking came from — a
+   * Booking stores no headcount of its own, and inventing a number for a
+   * confirmed event would be worse than leaving it blank.
+   */
+  guests: string;
   progress: number;
   daysToGo: number;
   steps: { label: string; done: boolean }[];
@@ -484,11 +494,26 @@ export class BookingService {
           }
         : null;
 
+    /*
+     * The originating brief, only for its guest count. Skipped entirely for a
+     * booking with no request (older/seeded rows), which then reports no guest
+     * count rather than a made-up one.
+     */
+    let guests = '';
+    if (booking.request) {
+      const seed = await this.quoteService.getRequestBrief(booking.request.toString());
+      guests = seed?.guests ?? '';
+    }
+
     return {
       id: booking._id.toString(),
       ref: booking.ref,
       title: booking.title,
       description: booking.description,
+      occasion: booking.occasion ?? '',
+      location: booking.location ?? '',
+      eventDate: booking.eventDate,
+      guests,
       progress: booking.progress,
       daysToGo: this.daysUntil(booking.eventDate),
       steps: booking.steps,
