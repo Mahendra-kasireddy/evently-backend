@@ -10,6 +10,7 @@ import { BookingModule } from '../booking/booking.module';
 import { NotificationModule } from '../notification/notification.module';
 import { PlanModule } from '../plan/plan.module';
 import { QuoteModule } from '../quote/quote.module';
+import { OfferModule } from '../offer/offer.module';
 
 /**
  * Home screen module (BFF). Depends on the domain modules and exposes a single
@@ -26,6 +27,7 @@ import { QuoteModule } from '../quote/quote.module';
     NotificationModule,
     PlanModule,
     QuoteModule,
+    OfferModule,
   ],
   controllers: [HomeController],
   providers: [HomeService, CurrentEventService],

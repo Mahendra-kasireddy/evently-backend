@@ -18,6 +18,10 @@ import {
   PlanServiceCategorySchema,
 } from './schemas/plan-service-category.schema';
 import { PlanSubmission, PlanSubmissionSchema } from './schemas/plan-submission.schema';
+import {
+  OrganizerProfile,
+  OrganizerProfileSchema,
+} from '../organizer/schemas/organizer-profile.schema';
 
 /**
  * Plan Event module (BFF + persistence). Serves the wizard config from
@@ -36,12 +40,22 @@ import { PlanSubmission, PlanSubmissionSchema } from './schemas/plan-submission.
       { name: PlanBudgetRange.name, schema: PlanBudgetRangeSchema },
       { name: PlanServiceCategory.name, schema: PlanServiceCategorySchema },
       { name: PlanSubmission.name, schema: PlanSubmissionSchema },
+      // Read directly for the occasion tiles' "from" price; OrganizerModule is
+      // already imported for the recommendation engine's richer needs.
+      { name: OrganizerProfile.name, schema: OrganizerProfileSchema },
     ]),
   ],
   controllers: [PlanController],
   providers: [PlanService, PlanConfigService, PlanSubmissionService],
   // Exported so the Home BFF can resolve the customer's latest active plan for
   // the "Current Event" card without duplicating plan persistence logic.
-  exports: [PlanSubmissionService],
+  /*
+   * PlanConfigService is exported for the Home BFF, which builds the
+   * "Plan something new" grid from the same occasion list the wizard uses.
+   * Providing a service is not the same as exporting it — Nest resolves an
+   * injection against the importing module's own context, so without this
+   * line HomeModule fails to start.
+   */
+  exports: [PlanSubmissionService, PlanConfigService],
 })
 export class PlanModule {}

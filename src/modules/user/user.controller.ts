@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { UserService } from './user.service';
 import { UpdateProfileDto, UpdateUserDto } from './dto/update-user.dto';
 import { UpdatePreferencesDto } from './dto/update-preferences.dto';
@@ -57,6 +57,27 @@ export class UserController {
   @Post('close-account')
   closeAccount(@CurrentUser('userId') userId: string) {
     return this.userService.closeOwnAccount(userId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Saved packages. Each route acts on the signed-in account and takes only a
+  // package id — there is no account id to point somewhere else.
+  // ---------------------------------------------------------------------------
+
+  /** The customer's own saved packages. */
+  @Get('saved-packages')
+  listSavedPackages(@CurrentUser('userId') userId: string) {
+    return this.userService.listSavedPackages(userId);
+  }
+
+  @Post('saved-packages/:packageId')
+  savePackage(@CurrentUser('userId') userId: string, @Param('packageId') packageId: string) {
+    return this.userService.savePackage(userId, packageId);
+  }
+
+  @Delete('saved-packages/:packageId')
+  unsavePackage(@CurrentUser('userId') userId: string, @Param('packageId') packageId: string) {
+    return this.userService.unsavePackage(userId, packageId);
   }
 
   @Get('getUserById/:id')

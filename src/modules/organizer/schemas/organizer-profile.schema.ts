@@ -189,6 +189,23 @@ export class OrganizerProfile {
   @Prop({ default: 24, min: 0 })
   responseHours: number;
 
+  /**
+   * How long this organizer actually takes to reply, in minutes — the median
+   * gap between a customer's message and the organizer's next one.
+   *
+   * Derived from the messages that exist rather than declared, because
+   * `responseHours` above is a schema default nothing has ever written: showing
+   * it to a customer would be showing them the number 24, not this organizer.
+   * `replySamples` is how many replies that median was taken over, so a caller
+   * can refuse to make the claim before there is enough of a history to make
+   * it. Zero samples means "we do not know", never "instant".
+   */
+  @Prop({ default: 0, min: 0 })
+  replyMedianMinutes: number;
+
+  @Prop({ default: 0, min: 0 })
+  replySamples: number;
+
   // Dates the organizer is already booked (availability check).
   @Prop({ type: [Date], default: [] })
   busyDates: Date[];

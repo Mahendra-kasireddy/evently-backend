@@ -1,11 +1,14 @@
 import { Injectable } from '@nestjs/common';
+import { Types } from 'mongoose';
 import { UserService } from '../user/user.service';
 import { ContentService, CUSTOMER_HOME_KEY } from '../content/content.service';
 import { PackageService } from '../package/package.service';
-import { OrganizerService } from '../organizer/organizer.service';
+import { OrganizerService, PublicOrganizerView } from '../organizer/organizer.service';
 import { BookingService } from '../booking/booking.service';
 import { NotificationService } from '../notification/notification.service';
 import { CurrentEventService } from './current-event.service';
+import { OfferService } from '../offer/offer.service';
+import { PlanConfigService } from '../plan/plan-config.service';
 
 /**
  * Home screen aggregator (BFF). Composes the domain services into the single
@@ -22,6 +25,8 @@ export class HomeService {
     private readonly bookingService: BookingService,
     private readonly notificationService: NotificationService,
     private readonly currentEventService: CurrentEventService,
+    private readonly offerService: OfferService,
+    private readonly planConfigService: PlanConfigService,
   ) {}
 
   async getHomeFeed(userId: string) {
@@ -29,23 +34,31 @@ export class HomeService {
     // and the rest of the payload is composed around it.
     const user = await this.userService.getProfileSummary(userId);
 
-    const [content, packages, nearby, booking, currentEvent, unreadCount] = await Promise.all([
-      this.contentService.getData(CUSTOMER_HOME_KEY),
-      this.packageService.findActive(),
-      this.organizerService.findTopNear(user.location),
-      // Ongoing booking (confirmed / in progress) behind Home's rich "BOOKED"
-      // card. Null for every other stage, where the compact `currentEvent`
-      // widget is shown instead — the two are mutually exclusive on Home.
-      this.bookingService.getActiveForUser(userId),
-      this.currentEventService.resolve(userId),
-      this.notificationService.unreadCount(userId),
-    ]);
+    const [content, packages, nearby, booking, currentEvent, unreadCount, offers, occasions] =
+      await Promise.all([
+        this.contentService.getData(CUSTOMER_HOME_KEY),
+        // The customer view: each package's organizer, their live rating and how
+        // busy they have been this month, rather than the raw documents.
+        this.packageService.findActiveForCustomer(),
+        this.organizerService.findTopNear(user.location),
+        // Ongoing booking (confirmed / in progress) behind Home's rich "BOOKED"
+        // card. Null for every other stage, where the compact `currentEvent`
+        // widget is shown instead — the two are mutually exclusive on Home.
+        this.bookingService.getActiveForUser(userId),
+        this.currentEventService.resolve(userId),
+        this.notificationService.unreadCount(userId),
+        // Only the offers whose window is open right now — see OfferService.
+        this.offerService.findLive(),
+        // The "Plan something new" grid: every occasion with the real lowest
+        // price an organizer serving it has published.
+        this.planConfigService.getOccasionTiles(),
+      ]);
 
     return {
       user,
       content,
       packages,
-      topOrganizers: nearby.organizers,
+      topOrganizers: await this.withBookedThisMonth(nearby.organizers),
       /**
        * Which pass produced `topOrganizers`: 'city' when they really are in the
        * customer's city, 'all' when nothing local existed and these come from
@@ -56,6 +69,28 @@ export class HomeService {
       booking,
       currentEvent,
       unreadCount,
+      offers,
+      occasions,
+      /**
+       * How many packages this account has kept, so the header's heart can
+       * carry its badge without the client fetching the list it is not showing.
+       */
+      savedPackageCount: await this.userService.countSavedPackages(userId),
     };
+  }
+  /**
+   * How busy each of these organizers has been this month.
+   *
+   * Counted from the bookings themselves rather than stored on the profile —
+   * a number an organizer could edit is not evidence of anything. Reuses the
+   * package service's aggregate so a "booked this month" figure is identical
+   * wherever it appears on the screen.
+   */
+  private async withBookedThisMonth(
+    organizers: PublicOrganizerView[],
+  ): Promise<Array<PublicOrganizerView & { bookedThisMonth: number }>> {
+    const ids = organizers.map((o) => new Types.ObjectId(o.id));
+    const counts = await this.packageService.bookedThisMonth(ids);
+    return organizers.map((o) => ({ ...o, bookedThisMonth: counts.get(o.id) ?? 0 }));
   }
 }

@@ -63,6 +63,14 @@ export interface LatestQuoteSummary {
   guests: string;
   status: QuoteRequestStatus;
   quoteCount: number;
+  /**
+   * The cheapest and dearest live quote on this request, in rupees, or 0 when
+   * none have arrived. Computed here rather than on the client because the
+   * client is never sent the quotations behind the Home card — only the two
+   * figures the card shows.
+   */
+  lowestQuote: number;
+  highestQuote: number;
   acceptedQuotationId: string | null;
   organizer: OrganizerRef | null;
   createdAt: Date | undefined;
@@ -392,11 +400,25 @@ export class QuoteService {
       guests: request.guests,
       status: request.status,
       quoteCount: quotations.length,
+      ...this.spread(quotations.map((q) => q.grandTotal ?? 0)),
       acceptedQuotationId: accepted?._id.toString() ?? null,
       organizer: toOrganizerRef(organizerDoc),
       createdAt: request.createdAt,
       updatedAt: request.updatedAt,
     };
+  }
+
+  /**
+   * The cheapest and dearest of a set of totals.
+   *
+   * Zeros are dropped rather than counted as a free quote — an organizer who
+   * has not priced their response should not make the lowest figure ₹0 and
+   * anchor the customer's expectation to a number nobody offered.
+   */
+  private spread(totals: number[]): { lowestQuote: number; highestQuote: number } {
+    const priced = totals.filter((t) => Number.isFinite(t) && t > 0);
+    if (priced.length === 0) return { lowestQuote: 0, highestQuote: 0 };
+    return { lowestQuote: Math.min(...priced), highestQuote: Math.max(...priced) };
   }
 
   /**

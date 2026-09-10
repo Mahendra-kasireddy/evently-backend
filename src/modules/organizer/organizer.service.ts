@@ -203,6 +203,17 @@ export class OrganizerService {
       .map((f) => ({ url: f.url, key: f.key, originalName: f.originalName }));
   }
 
+  /**
+   * The public view of a document another module already holds.
+   *
+   * Search filters against the collection itself for speed, then maps through
+   * here so a search result and a "near you" card are the same object — a
+   * second mapper would be a second place for the sanitisation to drift.
+   */
+  toPublicViewOf(doc: OrganizerProfileDocument): PublicOrganizerView {
+    return this.toPublicView(doc);
+  }
+
   private toPublicView(doc: OrganizerProfileDocument): PublicOrganizerView {
     return {
       id: doc._id.toString(),

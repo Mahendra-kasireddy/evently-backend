@@ -46,6 +46,14 @@ export class PlanController {
     return this.configService.getOccasions();
   }
 
+  /** The home grid: every occasion with its real "from" price and badge. */
+  @Public()
+  @PublicCache(120, 600)
+  @Get('occasion-tiles')
+  getOccasionTiles() {
+    return this.configService.getOccasionTiles();
+  }
+
   @Public()
   @PublicCache(120, 600)
   @Get('cities')

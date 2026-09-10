@@ -1,7 +1,7 @@
 {
   "name": "evently-backend",
   "version": "1.0.0",
-  "description": "Evently backend — NestJS modular monolith (API, queues, chat, notifications)",
+  "description": "Evently backend \u2014 NestJS modular monolith (API, queues, chat, notifications)",
   "author": "",
   "license": "ISC",
   "private": true,
@@ -17,7 +17,8 @@
     "seed": "ts-node scripts/seed.ts",
     "reset:data": "ts-node scripts/reset-data.ts",
     "check:user": "ts-node scripts/check-user.ts",
-    "test": "jest --passWithNoTests"
+    "test": "jest --passWithNoTests",
+    "check:di": "ts-node --transpile-only --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\"}' test/di-check.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1081.0",

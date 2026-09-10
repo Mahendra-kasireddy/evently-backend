@@ -1,6 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { idJsonTransform } from '../../../common/utils/id-transform';
-import { HydratedDocument } from 'mongoose';
+import { HydratedDocument, Types } from 'mongoose';
 import { Role } from '../../../common/enums/role.enum';
 
 export type UserDocument = HydratedDocument<User>;
@@ -90,6 +90,22 @@ export class User {
   /** When the account holder asked for it to be closed. */
   @Prop({ type: Date, default: null })
   deletedAt?: Date | null;
+
+  /**
+   * Curated packages the customer has kept for later.
+   *
+   * References rather than copies: a package's price band, guest range and
+   * tags are edited in the admin, and a saved snapshot would go stale the
+   * first time one changed — the customer would be looking at an offer that no
+   * longer exists. A package deleted outright simply drops out of the list
+   * when it is populated, which is the honest outcome.
+   *
+   * An array on the user rather than its own collection because this list is
+   * short by nature, is only ever read for one account at a time, and is
+   * written by exactly two operations.
+   */
+  @Prop({ type: [{ type: Types.ObjectId, ref: 'Package' }], default: [] })
+  savedPackages: Types.ObjectId[];
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

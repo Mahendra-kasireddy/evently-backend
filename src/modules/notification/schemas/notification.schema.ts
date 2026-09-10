@@ -8,6 +8,12 @@ export enum NotificationType {
   BOOKING = 'booking',
   QUOTE = 'quote',
   PAYMENT = 'payment',
+  /**
+   * Someone wrote in a thread. Its own type rather than SYSTEM so the inbox
+   * can mark it as a conversation — a message and a platform announcement
+   * want different icons and lead to different places.
+   */
+  MESSAGE = 'message',
   SYSTEM = 'system',
 }
 

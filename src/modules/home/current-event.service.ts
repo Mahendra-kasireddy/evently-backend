@@ -83,6 +83,12 @@ export interface CurrentEvent {
   daysToGo: number | null;
   organizer: OrganizerRef | null;
   quoteCount: number;
+  /**
+   * The spread across the quotes that have arrived, in rupees. Both 0 when
+   * none are priced yet, and the card then shows no range rather than "₹0".
+   */
+  lowestQuote: number;
+  highestQuote: number;
   bookingStatus: BookingStatus | null;
   /** Accepted quotation id, when a quote has been accepted (deep-links booking). */
   quotationId: string | null;
@@ -179,6 +185,8 @@ export class CurrentEventService {
       daysToGo: b.daysToGo ?? null,
       organizer: b.organizer,
       quoteCount: 0,
+      lowestQuote: 0,
+      highestQuote: 0,
       bookingStatus: b.status,
       quotationId: null,
       hasNewActivity: false,
@@ -202,6 +210,8 @@ export class CurrentEventService {
       daysToGo: null,
       organizer: q.organizer,
       quoteCount: q.quoteCount,
+      lowestQuote: q.lowestQuote,
+      highestQuote: q.highestQuote,
       bookingStatus: null,
       quotationId: q.acceptedQuotationId,
       hasNewActivity: false,
@@ -228,6 +238,8 @@ export class CurrentEventService {
       progress: STAGE_PROGRESS[stage],
       daysToGo: null,
       organizer: null,
+      lowestQuote: 0,
+      highestQuote: 0,
       quoteCount: 0,
       bookingStatus: null,
       quotationId: null,

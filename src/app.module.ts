@@ -27,6 +27,10 @@ import { SubvendorModule } from './modules/subvendor/subvendor.module';
 import { InvitationModule } from './modules/invitation/invitation.module';
 import { IdeaModule } from './modules/idea/idea.module';
 import { ContactModule } from './modules/contact/contact.module';
+import { OfferModule } from './modules/offer/offer.module';
+import { SearchModule } from './modules/search/search.module';
+import { ReviewModule } from './modules/review/review.module';
+import { MessageModule } from './modules/message/message.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 
@@ -80,6 +84,10 @@ import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
     InvitationModule,
     IdeaModule,
     ContactModule,
+    OfferModule,
+    SearchModule,
+    ReviewModule,
+    MessageModule,
     AdminModule,
     // ChatModule — still a stub
   ],

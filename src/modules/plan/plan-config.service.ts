@@ -4,6 +4,11 @@ import { Model } from 'mongoose';
 
 import { ContentService } from '../content/content.service';
 import { PlanOccasion, PlanOccasionDocument } from './schemas/plan-occasion.schema';
+import { PlanSubmission, PlanSubmissionDocument } from './schemas/plan-submission.schema';
+import {
+  OrganizerProfile,
+  OrganizerProfileDocument,
+} from '../organizer/schemas/organizer-profile.schema';
 import { PlanCity, PlanCityDocument } from './schemas/plan-city.schema';
 import { PlanGuestRange, PlanGuestRangeDocument } from './schemas/plan-guest-range.schema';
 import { PlanBudgetRange, PlanBudgetRangeDocument } from './schemas/plan-budget-range.schema';
@@ -20,6 +25,25 @@ export interface PlanOccasionView {
   label: string;
   art: string;
 }
+/**
+ * An occasion as the home grid shows it: what it is called, and the one honest
+ * line under it.
+ */
+export interface OccasionTileView extends PlanOccasionView {
+  /**
+   * The lowest base price among organizers who actually serve this occasion,
+   * in rupees. 0 when none of them has published one — the tile then carries
+   * no price line rather than "From ₹0".
+   */
+  fromPrice: number;
+  /**
+   * True for the single occasion most people have planned here. Derived by
+   * counting real submissions, so it moves as the platform does, and false for
+   * every occasion when there are no submissions to compare.
+   */
+  mostPlanned: boolean;
+}
+
 export interface PlanServiceCategoryView {
   id: string;
   title: string;
@@ -47,6 +71,10 @@ export class PlanConfigService {
     private readonly budgetRangeModel: Model<PlanBudgetRangeDocument>,
     @InjectModel(PlanServiceCategory.name)
     private readonly serviceCategoryModel: Model<PlanServiceCategoryDocument>,
+    @InjectModel(PlanSubmission.name)
+    private readonly submissionModel: Model<PlanSubmissionDocument>,
+    @InjectModel(OrganizerProfile.name)
+    private readonly organizerModel: Model<OrganizerProfileDocument>,
   ) {}
 
   async getOccasions(): Promise<PlanOccasionView[]> {
@@ -55,6 +83,56 @@ export class PlanConfigService {
       .sort({ order: 1, label: 1 })
       .exec();
     return docs.map((o) => ({ id: o.key, label: o.label, art: o.art }));
+  }
+
+  /**
+   * The occasion grid on Home.
+   *
+   * Both extra facts are counted rather than configured. The price is the
+   * cheapest an organizer serving that occasion has published, which is what
+   * "from" means; the badge goes to whichever occasion has the most plan
+   * submissions, and to none at all when there are none — a "Most planned"
+   * label on an empty platform is a claim about other customers who do not
+   * exist. Two aggregates cover every occasion, not one query per tile.
+   */
+  async getOccasionTiles(): Promise<OccasionTileView[]> {
+    const occasions = await this.getOccasions();
+    if (occasions.length === 0) return [];
+
+    const keys = occasions.map((o) => o.id);
+    const [prices, counts] = await Promise.all([
+      this.organizerModel
+        .aggregate<{
+          _id: string;
+          fromPrice: number;
+        }>([
+          { $match: { active: true, basePrice: { $gt: 0 }, occasions: { $in: keys } } },
+          { $unwind: '$occasions' },
+          { $match: { occasions: { $in: keys } } },
+          { $group: { _id: '$occasions', fromPrice: { $min: '$basePrice' } } },
+        ])
+        .exec(),
+      this.submissionModel
+        .aggregate<{
+          _id: string;
+          count: number;
+        }>([
+          { $match: { occasion: { $in: keys } } },
+          { $group: { _id: '$occasion', count: { $sum: 1 } } },
+          { $sort: { count: -1 } },
+          { $limit: 1 },
+        ])
+        .exec(),
+    ]);
+
+    const priceByOccasion = new Map(prices.map((row) => [row._id, row.fromPrice]));
+    const mostPlannedKey = counts[0]?.count ? counts[0]._id : null;
+
+    return occasions.map((occasion) => ({
+      ...occasion,
+      fromPrice: priceByOccasion.get(occasion.id) ?? 0,
+      mostPlanned: occasion.id === mostPlannedKey,
+    }));
   }
 
   async getCities(): Promise<string[]> {
