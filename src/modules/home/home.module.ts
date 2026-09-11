@@ -11,6 +11,7 @@ import { NotificationModule } from '../notification/notification.module';
 import { PlanModule } from '../plan/plan.module';
 import { QuoteModule } from '../quote/quote.module';
 import { OfferModule } from '../offer/offer.module';
+import { CouponModule } from '../coupon/coupon.module';
 
 /**
  * Home screen module (BFF). Depends on the domain modules and exposes a single
@@ -28,6 +29,8 @@ import { OfferModule } from '../offer/offer.module';
     PlanModule,
     QuoteModule,
     OfferModule,
+    // The home carousel advertises live platform coupons.
+    CouponModule,
   ],
   controllers: [HomeController],
   providers: [HomeService, CurrentEventService],

@@ -16,7 +16,8 @@ import { CreateBookingDto } from './dto/create-booking.dto';
 import { UpdateBookingDto } from './dto/update-booking.dto';
 import { UpdateBookingStatusDto } from './dto/update-booking-status.dto';
 import { CreateBookingTaskDto, UpdateBookingTaskDto } from './dto/booking-task.dto';
-import { QuoteService } from '../quote/quote.service';
+import { BookingSeed, QuoteService } from '../quote/quote.service';
+import { CouponQuote, CouponService } from '../coupon/coupon.service';
 import { OrganizerService } from '../organizer/organizer.service';
 import { SubvendorService } from '../subvendor/subvendor.service';
 import { QuoteRequestStatus } from '../quote/schemas/quote-request.schema';
@@ -46,14 +47,36 @@ import { Role } from '../../common/enums/role.enum';
 export interface ActiveBookingView {
   id: string;
   ref: string;
+  /** The occasion on its own — the date and place are their own fields. */
   title: string;
   description: string;
+  /** "5 Sep 2026", '' when the booking somehow has no date. */
+  dateLabel: string;
+  location: string;
+  /**
+   * Headcount, read from the quote request this booking came from. A Booking
+   * stores none of its own, so a booking with no request reports '' and the
+   * card simply leaves it out rather than inventing a number.
+   */
+  guests: string;
   progress: number;
   daysToGo: number;
   status: BookingStatus;
   /** Whether the organizer has confirmed — drives the card's sub-line. */
   organizerConfirmed: boolean;
   organizerName: string;
+  /** Enough to draw the organizer's avatar and open a thread with them. */
+  organizerId: string;
+  organizerInitials: string;
+  organizerAvatarColor: string;
+  /**
+   * Distinct sub-vendors the organizer has put on this event.
+   *
+   * Counted from the booking's own task assignments, so it is the number of
+   * people actually engaged — 0 for a booking nobody has staffed yet, which is
+   * why the card drops the line rather than saying "managing 0 vendors".
+   */
+  vendorCount: number;
   steps: { label: string; done: boolean }[];
 }
 
@@ -191,6 +214,7 @@ export class BookingService {
     private readonly organizerService: OrganizerService,
     private readonly subvendorService: SubvendorService,
     private readonly notificationService: NotificationService,
+    private readonly couponService: CouponService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -298,6 +322,14 @@ export class BookingService {
       eventDate: b.eventDate,
       daysToGo: this.daysUntil(b.eventDate),
       amount: b.amount,
+      /*
+       * What the booking would have cost, and what a coupon took off it. Older
+       * rows predate the field and report the amount itself, so a receipt never
+       * claims a saving of the whole booking.
+       */
+      originalAmount: b.originalAmount || b.amount,
+      couponCode: b.couponCode ?? '',
+      couponDiscount: b.couponDiscount ?? 0,
       advanceAmount,
       advancePercentage,
       balanceAmount: Math.max(0, b.amount - advanceAmount),
@@ -400,12 +432,17 @@ export class BookingService {
         customer: new Types.ObjectId(userId),
         status: { $in: BookingService.LIVE_BOOKING_STATUSES },
       })
-      .populate('organizer', 'name')
+      .populate('organizer', 'name initials avatarColor')
       .sort({ createdAt: -1 })
       .exec();
     if (!booking) return null;
 
-    const org = booking.organizer as unknown as { name?: string } | null;
+    const org = booking.organizer as unknown as {
+      _id?: Types.ObjectId;
+      name?: string;
+      initials?: string;
+      avatarColor?: string;
+    } | null;
     const organizerName =
       org && typeof org === 'object' && typeof org.name === 'string' && org.name.trim()
         ? org.name.trim()
@@ -425,7 +462,28 @@ export class BookingService {
 
     const occasion = (booking.occasion ?? '').trim();
     const date = BookingService.dateLabel(booking.eventDate);
-    const title = [`Your ${occasion || 'event'}`, date].filter(Boolean).join(' · ');
+
+    /*
+     * The originating brief, only for its guest count — a Booking stores no
+     * headcount. A booking with no request (older rows) reports none, and the
+     * card leaves the fact out rather than guessing at one.
+     */
+    let guests = '';
+    if (booking.request) {
+      const brief = await this.quoteService.getRequestBrief(booking.request.toString());
+      guests = brief?.guests ?? '';
+    }
+
+    /*
+     * Distinct sub-vendors on this event, however many tasks each of them has.
+     * Counting tasks instead would report "managing 9 vendors" for three people
+     * with three jobs apiece.
+     */
+    const vendorCount = new Set(
+      (booking.tasks ?? [])
+        .filter((task) => task.subVendorId)
+        .map((task) => task.subVendorId!.toString()),
+    ).size;
 
     /*
      * The sub-line says who is running the event and what is outstanding. Until
@@ -441,8 +499,13 @@ export class BookingService {
     return {
       id: booking._id.toString(),
       ref: booking.ref,
-      title,
+      // The occasion alone: the date, the place and the headcount are their
+      // own fields now, so the card can set them in their own type sizes.
+      title: occasion || 'Your event',
       description,
+      dateLabel: date,
+      location: (booking.location ?? '').trim(),
+      guests,
       /*
        * Derived from the milestones above rather than the status-stepped
        * `booking.progress`, so the ring and the ticks under it can never
@@ -454,6 +517,10 @@ export class BookingService {
       status: booking.status,
       organizerConfirmed: confirmed,
       organizerName,
+      organizerId: org?._id ? org._id.toString() : '',
+      organizerInitials: org?.initials ?? '',
+      organizerAvatarColor: org?.avatarColor ?? '',
+      vendorCount,
       steps,
     };
   }
@@ -568,46 +635,60 @@ export class BookingService {
       placedAt.getTime() + ORGANIZER_RESPONSE_WINDOW_HOURS * 60 * 60 * 1000,
     );
 
-    const created = await this.bookingModel.create({
-      customer: new Types.ObjectId(seed.customerId),
-      organizer: seed.organizerId ? new Types.ObjectId(seed.organizerId) : undefined,
-      quotation: new Types.ObjectId(seed.quotationId),
-      request: seed.requestId ? new Types.ObjectId(seed.requestId) : undefined,
-      ref: BookingService.generateRef(),
-      title,
-      occasion: seed.occasion,
-      location: seed.where,
-      description: `${seed.occasion || 'Event'} for ${seed.guests || 'your guests'}.`.trim(),
+    /*
+     * The coupon is re-judged here, against the amount read from the quotation
+     * a moment ago — not against anything the checkout screen sent. A code that
+     * was valid when the customer applied it can have expired, been disabled or
+     * been exhausted in between, and this is the last point at which that can
+     * still be caught. A refusal fails the booking rather than quietly charging
+     * full price, because the customer pressed a button that said a discounted
+     * total on it.
+     */
+    const quote = dto.couponCode
+      ? await this.couponService.evaluate(
+          {
+            customerId: seed.customerId,
+            organizerId: seed.organizerId,
+            amount: seed.amount,
+          },
+          dto.couponCode,
+        )
+      : null;
+
+    const amount = quote ? quote.finalAmount : seed.amount;
+    const advanceAmount = Math.round((amount * seed.advancePercentage) / 100);
+
+    /*
+     * The booking's id is minted here so the coupon can be spent before the
+     * booking is written. Claiming the usage slot is the step that can lose a
+     * race, so it happens first: if the last slot has just gone, nothing has
+     * been created and the customer gets an error instead of a booking whose
+     * discount was never recorded. If the booking write then fails, the
+     * redemption is reversed and the slot handed straight back.
+     */
+    const bookingId = new Types.ObjectId();
+    if (quote) {
+      await this.couponService.redeem({
+        quote,
+        customerId: seed.customerId,
+        bookingId: bookingId.toString(),
+        organizerId: seed.organizerId,
+      });
+    }
+
+    const created = await this.createBookingDocument({
+      bookingId,
+      seed,
+      quote,
+      amount,
+      advanceAmount,
       eventDate,
-      amount: seed.amount,
-      /*
-       * Creating the booking IS the advance payment in this flow — the customer
-       * reaches `POST /booking` only from checkout's "Confirm & Pay". So the
-       * payment axis is settled here, and the booking axis moves to
-       * AWAITING_ORGANIZER: paid, but not yet accepted by anyone.
-       */
-      advancePercentage: seed.advancePercentage,
-      advanceAmount: seed.advanceAmount,
-      amountPaid: seed.advanceAmount,
-      paymentStatus: PaymentStatus.ADVANCE_PAID,
-      advancePaidAt: placedAt,
-      organizerRespondBy: respondBy,
-      progress: STATUS_META[BookingStatus.AWAITING_ORGANIZER].progress,
-      status: BookingStatus.AWAITING_ORGANIZER,
-      steps: BOOKING_STEPS.map((label, i) => ({ label, done: i <= 1 })),
-      timeline: [
-        {
-          status: BookingStatus.PENDING,
-          label: STATUS_META[BookingStatus.PENDING].label,
-          at: placedAt,
-        },
-        {
-          status: BookingStatus.AWAITING_ORGANIZER,
-          label: STATUS_META[BookingStatus.AWAITING_ORGANIZER].label,
-          note: `Advance of ₹${seed.advanceAmount.toLocaleString('en-IN')} received.`,
-          at: placedAt,
-        },
-      ],
+      title,
+      placedAt,
+      respondBy,
+    }).catch(async (error: unknown) => {
+      if (quote) await this.couponService.releaseForBooking(bookingId.toString());
+      throw error;
     });
 
     await this.notifyUser(
@@ -625,6 +706,71 @@ export class BookingService {
 
     const populated = await created.populate('organizer', 'name initials avatarColor tier rating');
     return this.detailView(populated);
+  }
+
+  /** The booking row itself, once the money on it has been settled. */
+  private async createBookingDocument(input: {
+    bookingId: Types.ObjectId;
+    seed: BookingSeed;
+    quote: CouponQuote | null;
+    amount: number;
+    advanceAmount: number;
+    eventDate: Date;
+    title: string;
+    placedAt: Date;
+    respondBy: Date;
+  }): Promise<BookingDocument> {
+    const { bookingId, seed, quote, amount, advanceAmount, eventDate, title, placedAt, respondBy } =
+      input;
+
+    return this.bookingModel.create({
+      _id: bookingId,
+      customer: new Types.ObjectId(seed.customerId),
+      organizer: seed.organizerId ? new Types.ObjectId(seed.organizerId) : undefined,
+      quotation: new Types.ObjectId(seed.quotationId),
+      request: seed.requestId ? new Types.ObjectId(seed.requestId) : undefined,
+      ref: BookingService.generateRef(),
+      title,
+      occasion: seed.occasion,
+      location: seed.where,
+      description: `${seed.occasion || 'Event'} for ${seed.guests || 'your guests'}.`.trim(),
+      eventDate,
+      amount,
+      originalAmount: seed.amount,
+      coupon: quote ? new Types.ObjectId(quote.couponId) : null,
+      couponCode: quote ? quote.code : '',
+      couponDiscount: quote ? quote.discountAmount : 0,
+      /*
+       * Creating the booking IS the advance payment in this flow — the customer
+       * reaches `POST /booking` only from checkout's "Confirm & Pay". So the
+       * payment axis is settled here, and the booking axis moves to
+       * AWAITING_ORGANIZER: paid, but not yet accepted by anyone.
+       */
+      advancePercentage: seed.advancePercentage,
+      advanceAmount,
+      amountPaid: advanceAmount,
+      paymentStatus: PaymentStatus.ADVANCE_PAID,
+      advancePaidAt: placedAt,
+      organizerRespondBy: respondBy,
+      progress: STATUS_META[BookingStatus.AWAITING_ORGANIZER].progress,
+      status: BookingStatus.AWAITING_ORGANIZER,
+      steps: BOOKING_STEPS.map((label, i) => ({ label, done: i <= 1 })),
+      timeline: [
+        {
+          status: BookingStatus.PENDING,
+          label: STATUS_META[BookingStatus.PENDING].label,
+          at: placedAt,
+        },
+        {
+          status: BookingStatus.AWAITING_ORGANIZER,
+          label: STATUS_META[BookingStatus.AWAITING_ORGANIZER].label,
+          note: quote
+            ? `Advance of ₹${advanceAmount.toLocaleString('en-IN')} received. Coupon ${quote.code} saved ₹${quote.discountAmount.toLocaleString('en-IN')}.`
+            : `Advance of ₹${advanceAmount.toLocaleString('en-IN')} received.`,
+          at: placedAt,
+        },
+      ],
+    });
   }
 
   /**
@@ -1420,6 +1566,15 @@ export class BookingService {
     this.syncSteps(booking);
     await booking.save();
 
+    /*
+     * A booking that was cancelled, declined or never answered did not become
+     * an event, so the coupon spent on it goes back to the customer. Without
+     * this a one-per-person coupon is burnt by an organizer who simply said no.
+     */
+    if (TERMINAL.includes(dto.status)) {
+      await this.couponService.releaseForBooking(booking._id.toString());
+    }
+
     await this.emitTransitionNotifications(booking, dto.status);
     return this.detailView(booking);
   }
@@ -1443,6 +1598,9 @@ export class BookingService {
       at: new Date(),
     });
     await booking.save();
+    // Same reasoning as a cancellation: no event happened, so the coupon is
+    // not spent. See `updateStatus`.
+    await this.couponService.releaseForBooking(booking._id.toString());
     await this.notifyUser(
       booking.customer,
       'Organizer did not respond',

@@ -7,6 +7,7 @@ import { AdminBookingController, AdminPaymentController } from './admin-booking.
 import { Booking, BookingSchema } from './schemas/booking.schema';
 import { Invitation, InvitationSchema } from '../invitation/schemas/invitation.schema';
 import { QuoteModule } from '../quote/quote.module';
+import { CouponModule } from '../coupon/coupon.module';
 import { OrganizerModule } from '../organizer/organizer.module';
 import { SubvendorModule } from '../subvendor/subvendor.module';
 import { NotificationModule } from '../notification/notification.module';
@@ -20,6 +21,8 @@ import { NotificationModule } from '../notification/notification.module';
       { name: Invitation.name, schema: InvitationSchema },
     ]),
     QuoteModule,
+    // Coupons are validated and spent here, never by the client.
+    CouponModule,
     OrganizerModule,
     SubvendorModule,
     NotificationModule,

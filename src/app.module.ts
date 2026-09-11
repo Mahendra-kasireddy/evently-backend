@@ -31,6 +31,7 @@ import { OfferModule } from './modules/offer/offer.module';
 import { SearchModule } from './modules/search/search.module';
 import { ReviewModule } from './modules/review/review.module';
 import { MessageModule } from './modules/message/message.module';
+import { CouponModule } from './modules/coupon/coupon.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 
@@ -88,6 +89,7 @@ import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
     SearchModule,
     ReviewModule,
     MessageModule,
+    CouponModule,
     AdminModule,
     // ChatModule — still a stub
   ],

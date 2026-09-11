@@ -18,7 +18,8 @@
     "reset:data": "ts-node scripts/reset-data.ts",
     "check:user": "ts-node scripts/check-user.ts",
     "test": "jest --passWithNoTests",
-    "check:di": "ts-node --transpile-only --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\"}' test/di-check.ts"
+    "check:di": "ts-node --transpile-only --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\"}' test/di-check.ts",
+    "check:coupons": "ts-node --transpile-only --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\"}' test/coupon-check.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1081.0",

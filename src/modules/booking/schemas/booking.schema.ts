@@ -156,9 +156,32 @@ export class Booking {
   @Prop({ required: true })
   eventDate: Date;
 
-  // Snapshot of the accepted quotation's grand total (rupees).
+  /**
+   * What the customer is actually charged (rupees) — the quotation's grand
+   * total less any coupon. Every downstream number (advance, balance,
+   * commission, payout, earnings) is a function of this, so a discount is felt
+   * everywhere without a second money field having to be threaded through.
+   */
   @Prop({ default: 0, min: 0 })
   amount: number;
+
+  /**
+   * The quotation total before any coupon, so a discounted booking can still
+   * say what it would have cost. Equal to `amount` when no coupon was used.
+   */
+  @Prop({ default: 0, min: 0 })
+  originalAmount: number;
+
+  /** The coupon spent on this booking, if any — the ledger row points back. */
+  @Prop({ type: Types.ObjectId, ref: 'Coupon', default: null, index: true })
+  coupon: Types.ObjectId | null;
+
+  /** Snapshotted so the booking reads without a join, and never restates. */
+  @Prop({ trim: true, default: '' })
+  couponCode: string;
+
+  @Prop({ default: 0, min: 0 })
+  couponDiscount: number;
 
   @Prop({ default: 0, min: 0, max: 100 })
   progress: number;

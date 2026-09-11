@@ -94,6 +94,28 @@ export function toOrganizerRef(org: unknown): OrganizerRef | null {
   };
 }
 
+/**
+ * Everything a booking needs from an accepted quotation, checked and priced.
+ *
+ * Named rather than inline because it is now the contract two modules read
+ * against: BookingService writes the booking from it, and CouponService judges
+ * a coupon against the same `amount` and `organizerId`. One shape means the
+ * discount can never be computed against a total the booking did not use.
+ */
+export interface BookingSeed {
+  quotationId: string;
+  requestId: string | null;
+  organizerId: string | null;
+  customerId: string;
+  amount: number;
+  occasion: string;
+  when: string;
+  where: string;
+  guests: string;
+  advancePercentage: number;
+  advanceAmount: number;
+}
+
 @Injectable()
 export class QuoteService {
   private readonly logger = new Logger(QuoteService.name);
@@ -482,22 +504,35 @@ export class QuoteService {
    * quote internals stay encapsulated here. Throws unless the quotation is owned
    * by the customer and has been accepted.
    */
-  async getBookingSeed(
-    userId: string,
-    quotationId: string,
-  ): Promise<{
-    quotationId: string;
-    requestId: string | null;
-    organizerId: string | null;
-    customerId: string;
-    amount: number;
-    occasion: string;
-    when: string;
-    where: string;
-    guests: string;
-    advancePercentage: number;
-    advanceAmount: number;
-  }> {
+  /**
+   * The organizers this customer currently has a live quotation from.
+   *
+   * Used to decide whose coupons are worth showing on Home. Draft, withdrawn
+   * and rejected quotations are excluded because they are not a conversation
+   * any more; an accepted one is kept, because that is precisely the quotation
+   * a coupon is about to be applied to at checkout.
+   *
+   * Live bookings are deliberately not included: the advance has already been
+   * settled on those, so a coupon can no longer change what they cost, and
+   * advertising one against them would be advertising a discount the customer
+   * has missed.
+   */
+  async organizerIdsForCustomer(userId: string): Promise<string[]> {
+    if (!Types.ObjectId.isValid(userId)) return [];
+
+    const ids = await this.quotationModel
+      .distinct('organizer', {
+        customer: new Types.ObjectId(userId),
+        status: {
+          $in: [QuotationStatus.SENT, QuotationStatus.UPDATED, QuotationStatus.ACCEPTED],
+        },
+      })
+      .exec();
+
+    return (ids as Types.ObjectId[]).filter(Boolean).map((id) => id.toString());
+  }
+
+  async getBookingSeed(userId: string, quotationId: string): Promise<BookingSeed> {
     const q = await this.quotationModel
       .findOne({ _id: this.toObjectId(quotationId), customer: new Types.ObjectId(userId) })
       .exec();
