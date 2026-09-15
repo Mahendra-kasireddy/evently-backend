@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { PackageService } from './package.service';
 import { PackageController } from './package.controller';
+import { AdminPackageController } from './admin-package.controller';
+import { OrganizerPackageController } from './organizer-package.controller';
 import { Package, PackageSchema } from './schemas/package.schema';
 import {
   OrganizerProfile,
@@ -23,7 +25,7 @@ import { Booking, BookingSchema } from '../booking/schemas/booking.schema';
       { name: Booking.name, schema: BookingSchema },
     ]),
   ],
-  controllers: [PackageController],
+  controllers: [PackageController, AdminPackageController, OrganizerPackageController],
   providers: [PackageService],
   exports: [PackageService],
 })

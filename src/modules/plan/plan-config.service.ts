@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
 import { ContentService } from '../content/content.service';
+import { StoredFile } from '../organizer/schemas/organizer-profile.schema';
 import { PlanOccasion, PlanOccasionDocument } from './schemas/plan-occasion.schema';
 import { PlanSubmission, PlanSubmissionDocument } from './schemas/plan-submission.schema';
 import {
@@ -24,6 +25,13 @@ export interface PlanOccasionView {
   id: string;
   label: string;
   art: string;
+  /**
+   * An uploaded photograph for this tile, or '' when none has been set.
+   *
+   * '' is the ordinary case, not an error: the client draws the illustration
+   * keyed by `art` instead. A tile is never blank for want of a photo.
+   */
+  imageUrl: string;
 }
 /**
  * An occasion as the home grid shows it: what it is called, and the one honest
@@ -44,11 +52,28 @@ export interface OccasionTileView extends PlanOccasionView {
   mostPlanned: boolean;
 }
 
+/** An occasion or category as the admin console lists it. */
+export interface AdminTileView {
+  key: string;
+  label: string;
+  /** The illustration key this tile falls back to — `art` or `icon`. */
+  art: string;
+  active: boolean;
+  imageUrl: string;
+}
+
+/** Records when a picture was attached, so the row is not silent about it. */
+function stamp(image: StoredFile | null): StoredFile | null {
+  return image ? { ...image, uploadedAt: image.uploadedAt ?? new Date() } : null;
+}
+
 export interface PlanServiceCategoryView {
   id: string;
   title: string;
   subtitle: string;
   icon: string;
+  /** As above: '' means "draw the icon", not "something is missing". */
+  imageUrl: string;
 }
 
 /**
@@ -82,7 +107,12 @@ export class PlanConfigService {
       .find({ active: true })
       .sort({ order: 1, label: 1 })
       .exec();
-    return docs.map((o) => ({ id: o.key, label: o.label, art: o.art }));
+    return docs.map((o) => ({
+      id: o.key,
+      label: o.label,
+      art: o.art,
+      imageUrl: o.image?.url ?? '',
+    }));
   }
 
   /**
@@ -160,7 +190,72 @@ export class PlanConfigService {
       title: c.title,
       subtitle: c.subtitle,
       icon: c.icon,
+      imageUrl: c.image?.url ?? '',
     }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Tile pictures (admin)
+  //
+  // An absent picture is the ordinary state: `imageUrl` comes back '' and the
+  // client draws the illustration it always has. Nothing here makes a photo
+  // required, and clearing one is a supported outcome rather than a failure.
+  // ---------------------------------------------------------------------------
+
+  /** Every occasion and category, active or not, so an admin sees the gaps. */
+  async listTilesForAdmin(): Promise<{
+    occasions: AdminTileView[];
+    categories: AdminTileView[];
+  }> {
+    const [occasions, categories] = await Promise.all([
+      this.occasionModel.find().sort({ order: 1, label: 1 }).exec(),
+      this.serviceCategoryModel.find().sort({ order: 1, title: 1 }).exec(),
+    ]);
+
+    return {
+      occasions: occasions.map((o) => ({
+        key: o.key,
+        label: o.label,
+        art: o.art,
+        active: o.active,
+        imageUrl: o.image?.url ?? '',
+      })),
+      categories: categories.map((c) => ({
+        key: c.key,
+        label: c.title,
+        art: c.icon,
+        active: c.active,
+        imageUrl: c.image?.url ?? '',
+      })),
+    };
+  }
+
+  async setOccasionImage(key: string, image: StoredFile | null): Promise<AdminTileView> {
+    const doc = await this.occasionModel.findOne({ key: key.trim() }).exec();
+    if (!doc) throw new NotFoundException('Occasion not found');
+    doc.image = stamp(image);
+    await doc.save();
+    return {
+      key: doc.key,
+      label: doc.label,
+      art: doc.art,
+      active: doc.active,
+      imageUrl: doc.image?.url ?? '',
+    };
+  }
+
+  async setCategoryImage(key: string, image: StoredFile | null): Promise<AdminTileView> {
+    const doc = await this.serviceCategoryModel.findOne({ key: key.trim() }).exec();
+    if (!doc) throw new NotFoundException('Category not found');
+    doc.image = stamp(image);
+    await doc.save();
+    return {
+      key: doc.key,
+      label: doc.title,
+      art: doc.icon,
+      active: doc.active,
+      imageUrl: doc.image?.url ?? '',
+    };
   }
 
   /** Full wizard screen payload (aggregated — one request for the whole screen). */

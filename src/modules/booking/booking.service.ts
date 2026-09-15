@@ -1,4 +1,11 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+  forwardRef,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import {
@@ -18,6 +25,12 @@ import { UpdateBookingStatusDto } from './dto/update-booking-status.dto';
 import { CreateBookingTaskDto, UpdateBookingTaskDto } from './dto/booking-task.dto';
 import { BookingSeed, QuoteService } from '../quote/quote.service';
 import { CouponQuote, CouponService } from '../coupon/coupon.service';
+import {
+  PaymentOrder,
+  PaymentOrderDocument,
+  PaymentOrderStatus,
+} from '../payment/schemas/payment-order.schema';
+import { PaymentService } from '../payment/payment.service';
 import { OrganizerService } from '../organizer/organizer.service';
 import { SubvendorService } from '../subvendor/subvendor.service';
 import { QuoteRequestStatus } from '../quote/schemas/quote-request.schema';
@@ -118,6 +131,13 @@ export interface LatestBookingSummary {
   steps: { label: string; done: boolean }[];
   status: BookingStatus;
   organizer: BookingOrganizerRef | null;
+  /**
+   * The brief this booking came from, when it came from one.
+   *
+   * Home reads it to recognise that a still-ACCEPTED request and this booking
+   * are one event rather than two.
+   */
+  requestId: string | null;
   createdAt: Date | undefined;
   updatedAt: Date | undefined;
 }
@@ -215,6 +235,19 @@ export class BookingService {
     private readonly subvendorService: SubvendorService,
     private readonly notificationService: NotificationService,
     private readonly couponService: CouponService,
+    /*
+     * The payment record, not PaymentModule: payments depend on bookings, so
+     * importing the module back would be a cycle. Read-only here.
+     */
+    @InjectModel(PaymentOrder.name)
+    private readonly paymentOrderModel: Model<PaymentOrderDocument>,
+    /*
+     * Payments depend on bookings and bookings now depend on payments — a
+     * booking that dies has to give the advance back. `forwardRef` is how Nest
+     * resolves that pair; the alternative was a refund nobody triggers.
+     */
+    @Inject(forwardRef(() => PaymentService))
+    private readonly paymentService: PaymentService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -586,6 +619,7 @@ export class BookingService {
       steps: booking.steps,
       status: booking.status,
       organizer,
+      requestId: booking.request ? booking.request.toString() : null,
       createdAt: booking.createdAt,
       updatedAt: booking.updatedAt,
     };
@@ -612,10 +646,21 @@ export class BookingService {
   // ---------------------------------------------------------------------------
 
   /** Create a booking from an accepted quotation. Idempotent per quotation. */
+  /**
+   * Turns an accepted quotation into a booking, once the advance is paid.
+   *
+   * `paymentOrderId` is the paid Razorpay order that bought it. While no
+   * gateway is configured it may be omitted and the old behaviour stands —
+   * calling this endpoint *is* the payment, as it has been since before there
+   * was anything to pay with. The moment Razorpay keys exist, a booking
+   * without a verified payment is refused, on web and mobile alike.
+   */
   async createFromQuotation(
     userId: string,
     dto: CreateBookingDto,
+    paymentOrderId?: string,
   ): Promise<Record<string, unknown>> {
+    await this.assertPaidFor(userId, dto.quotationId, paymentOrderId);
     const seed = await this.quoteService.getBookingSeed(userId, dto.quotationId);
 
     // Idempotency: one booking per quotation.
@@ -706,6 +751,44 @@ export class BookingService {
 
     const populated = await created.populate('organizer', 'name initials avatarColor tier rating');
     return this.detailView(populated);
+  }
+
+  /**
+   * Refuses a booking that nobody paid for.
+   *
+   * The check is skipped entirely while Razorpay is unconfigured, so nothing
+   * breaks before the keys land; once they do, this is the door. A payment
+   * that belongs to another customer, another quotation, or that was never
+   * captured is not a payment for this booking.
+   */
+  private async assertPaidFor(
+    userId: string,
+    quotationId: string,
+    paymentOrderId?: string,
+  ): Promise<void> {
+    const gatewayLive = Boolean(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET);
+    if (!gatewayLive) return;
+
+    // A booking that already exists was paid for the first time round; the
+    // caller is retrying, and refusing now would strand them.
+    const existing = await this.bookingModel
+      .exists({ quotation: this.toObjectId(quotationId) })
+      .exec();
+    if (existing) return;
+
+    if (!paymentOrderId || !Types.ObjectId.isValid(paymentOrderId)) {
+      throw new ForbiddenException('This booking has not been paid for.');
+    }
+
+    const order = await this.paymentOrderModel.findById(paymentOrderId).exec();
+    if (
+      !order ||
+      order.status !== PaymentOrderStatus.PAID ||
+      order.customer.toString() !== userId ||
+      order.quotation.toString() !== quotationId
+    ) {
+      throw new ForbiddenException('This booking has not been paid for.');
+    }
   }
 
   /** The booking row itself, once the money on it has been settled. */
@@ -1573,6 +1656,8 @@ export class BookingService {
      */
     if (TERMINAL.includes(dto.status)) {
       await this.couponService.releaseForBooking(booking._id.toString());
+      // The event is not happening, so the advance goes back.
+      await this.paymentService.refundForBooking(booking._id.toString(), dto.status);
     }
 
     await this.emitTransitionNotifications(booking, dto.status);
@@ -1599,8 +1684,9 @@ export class BookingService {
     });
     await booking.save();
     // Same reasoning as a cancellation: no event happened, so the coupon is
-    // not spent. See `updateStatus`.
+    // not spent and the advance is not earned. See `updateStatus`.
     await this.couponService.releaseForBooking(booking._id.toString());
+    await this.paymentService.refundForBooking(booking._id.toString(), 'expired');
     await this.notifyUser(
       booking.customer,
       'Organizer did not respond',

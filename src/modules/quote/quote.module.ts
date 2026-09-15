@@ -9,6 +9,11 @@ import { Quotation, QuotationSchema } from './schemas/quotation.schema';
 import { User, UserSchema } from '../user/schemas/user.schema';
 import { Booking, BookingSchema } from '../booking/schemas/booking.schema';
 import { OrganizerModule } from '../organizer/organizer.module';
+import { PlanModule } from '../plan/plan.module';
+import {
+  OrganizerProfile,
+  OrganizerProfileSchema,
+} from '../organizer/schemas/organizer-profile.schema';
 import { NotificationModule } from '../notification/notification.module';
 
 @Module({
@@ -20,8 +25,14 @@ import { NotificationModule } from '../notification/notification.module';
       // BookingModule already imports this one, so either would be a cycle.
       { name: User.name, schema: UserSchema },
       { name: Booking.name, schema: BookingSchema },
+      // Read-only: the request view names the organizers that have not replied
+      // yet. Registered rather than reached through OrganizerService, whose
+      // lookups are built around one active profile at a time.
+      { name: OrganizerProfile.name, schema: OrganizerProfileSchema },
     ]),
     OrganizerModule,
+    // For the recommendation engine that picks a broadcast's recipients.
+    PlanModule,
     NotificationModule,
   ],
   controllers: [QuoteController, AdminEventController],

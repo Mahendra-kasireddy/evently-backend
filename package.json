@@ -1,7 +1,7 @@
 {
   "name": "evently-backend",
   "version": "1.0.0",
-  "description": "Evently backend \u2014 NestJS modular monolith (API, queues, chat, notifications)",
+  "description": "Evently backend — NestJS modular monolith (API, queues, chat, notifications)",
   "author": "",
   "license": "ISC",
   "private": true,
@@ -19,7 +19,9 @@
     "check:user": "ts-node scripts/check-user.ts",
     "test": "jest --passWithNoTests",
     "check:di": "ts-node --transpile-only --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\"}' test/di-check.ts",
-    "check:coupons": "ts-node --transpile-only --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\"}' test/coupon-check.ts"
+    "check:coupons": "ts-node --transpile-only --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\"}' test/coupon-check.ts",
+    "check:home": "ts-node --transpile-only --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\"}' test/home-check.ts",
+    "check:feed": "ts-node --transpile-only --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\"}' test/feed-check.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1081.0",
@@ -49,6 +51,7 @@
     "mongoose": "^8.5.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
+    "razorpay": "^2.9.8",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "socket.io": "^4.7.5"

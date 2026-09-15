@@ -41,7 +41,7 @@ export class HomeService {
       packages,
       nearby,
       booking,
-      currentEvent,
+      liveEvents,
       unreadCount,
       offers,
       occasions,
@@ -53,10 +53,11 @@ export class HomeService {
       this.packageService.findActiveForCustomer(),
       this.organizerService.findTopNear(user.location),
       // Ongoing booking (confirmed / in progress) behind Home's rich "BOOKED"
-      // card. Null for every other stage, where the compact `currentEvent`
-      // widget is shown instead — the two are mutually exclusive on Home.
+      // card. Null at every other stage, where the `currentEvent` hero carries
+      // the event instead.
       this.bookingService.getActiveForUser(userId),
-      this.currentEventService.resolve(userId),
+      // Every live event, furthest along first — see `otherEvents` below.
+      this.currentEventService.resolveAll(userId),
       this.notificationService.unreadCount(userId),
       // Only the offers whose window is open right now — see OfferService.
       this.offerService.findLive(),
@@ -81,7 +82,17 @@ export class HomeService {
        */
       topOrganizersScope: nearby.scope,
       booking,
-      currentEvent,
+      currentEvent: liveEvents[0] ?? null,
+      /**
+       * The customer's other live events, same furthest-along-first order,
+       * never including the one above.
+       *
+       * Home shows the leader in its big card. Anything else on the go used to
+       * be dropped here, so a confirmed booking hid a brief still collecting
+       * quotes for a different occasion, and the customer's only clue that
+       * their request existed was the Events tab.
+       */
+      otherEvents: liveEvents.slice(1),
       unreadCount,
       offers,
       occasions,

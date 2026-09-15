@@ -68,6 +68,30 @@ export class QuoteRequest {
   @Prop({ trim: true, default: '', maxlength: 5000 })
   ideas: string;
 
+  /**
+   * The organizers this request was actually sent to.
+   *
+   * Before this existed a broadcast set `organizer: null` and every organizer's
+   * inbox matched it, so nobody could say who a request had reached — and
+   * nobody was told it existed either. Recording the list is what lets the
+   * customer be shown "went to 4 organizers, 3 have replied", lets the one who
+   * has not replied be named, and lets each recipient be notified.
+   *
+   * Empty on requests created before this field, which the organizer inbox
+   * still matches by the old rule — see `listIncoming`.
+   */
+  @Prop({ type: [{ type: Types.ObjectId, ref: 'OrganizerProfile' }], default: [], index: true })
+  recipients: Types.ObjectId[];
+
+  /**
+   * When the request stops taking quotes.
+   *
+   * A request with no deadline is one an organizer can answer next month and a
+   * customer has to keep checking. Null on rows created before the field.
+   */
+  @Prop({ type: Date, default: null, index: true })
+  closesAt: Date | null;
+
   @Prop({ type: String, enum: QuoteRequestStatus, default: QuoteRequestStatus.OPEN, index: true })
   status: QuoteRequestStatus;
 

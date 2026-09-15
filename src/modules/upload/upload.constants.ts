@@ -19,6 +19,10 @@ export enum UploadPurpose {
   TASK_PROOF = 'taskProof',
   /** Reference photos attached to an idea on a booking's planning board. */
   IDEA_IMAGE = 'ideaImage',
+  /** The banner photo on a curated package card. */
+  PACKAGE_PHOTO = 'packagePhoto',
+  /** The photo behind a service-category or occasion tile. */
+  CATEGORY_IMAGE = 'categoryImage',
 }
 
 export interface ImageDimensionRule {
@@ -102,5 +106,23 @@ export const UPLOAD_RULES: Record<UploadPurpose, UploadRule> = {
     mimeTypes: IMAGE_MIMES,
     extensions: IMAGE_EXTS,
     image: { minWidth: 80, minHeight: 80, maxWidth: 6000, maxHeight: 6000 },
+  },
+  /*
+   * Both are wide banner crops shown at card width, so they carry the cover
+   * image's minimums rather than the gallery's: a 200px-wide photo stretched
+   * across a package card looks worse than the illustration it replaced, and
+   * the whole point of allowing a photo is that it looks better.
+   */
+  [UploadPurpose.PACKAGE_PHOTO]: {
+    maxBytes: 8 * MB,
+    mimeTypes: IMAGE_MIMES,
+    extensions: IMAGE_EXTS,
+    image: { minWidth: 600, minHeight: 200, maxWidth: 6000, maxHeight: 4000 },
+  },
+  [UploadPurpose.CATEGORY_IMAGE]: {
+    maxBytes: 8 * MB,
+    mimeTypes: IMAGE_MIMES,
+    extensions: IMAGE_EXTS,
+    image: { minWidth: 400, minHeight: 300, maxWidth: 6000, maxHeight: 4000 },
   },
 };

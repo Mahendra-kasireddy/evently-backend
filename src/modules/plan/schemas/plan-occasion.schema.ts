@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { idJsonTransform } from '../../../common/utils/id-transform';
 import { HydratedDocument } from 'mongoose';
+import { StoredFileSchema, StoredFile } from '../../organizer/schemas/organizer-profile.schema';
 
 export type PlanOccasionDocument = HydratedDocument<PlanOccasion>;
 
@@ -25,6 +26,16 @@ export class PlanOccasion {
   // Art key that maps to the card gradient/illustration on the client.
   @Prop({ required: true, trim: true })
   art: string;
+
+  /**
+   * An optional photograph behind the tile.
+   *
+   * Null is the normal state and not a missing value: the client then draws the
+   * illustration keyed by `art`, which is what every one of these has always
+   * shown. A photo replaces that illustration for this one tile only.
+   */
+  @Prop({ type: StoredFileSchema, default: null })
+  image?: StoredFile | null;
 
   @Prop({ default: 0, index: true })
   order: number;

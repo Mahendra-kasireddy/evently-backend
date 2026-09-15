@@ -5,6 +5,7 @@ import { PlanService } from './plan.service';
 import { PlanConfigService } from './plan-config.service';
 import { PlanSubmissionService } from './plan-submission.service';
 import { PlanController } from './plan.controller';
+import { AdminPlanConfigController } from './admin-plan-config.controller';
 import { ContentModule } from '../content/content.module';
 import { OrganizerModule } from '../organizer/organizer.module';
 import { NotificationModule } from '../notification/notification.module';
@@ -45,7 +46,7 @@ import {
       { name: OrganizerProfile.name, schema: OrganizerProfileSchema },
     ]),
   ],
-  controllers: [PlanController],
+  controllers: [PlanController, AdminPlanConfigController],
   providers: [PlanService, PlanConfigService, PlanSubmissionService],
   // Exported so the Home BFF can resolve the customer's latest active plan for
   // the "Current Event" card without duplicating plan persistence logic.
@@ -56,6 +57,11 @@ import {
    * injection against the importing module's own context, so without this
    * line HomeModule fails to start.
    */
-  exports: [PlanSubmissionService, PlanConfigService],
+  /*
+   * PlanService is exported for its recommendation engine: a quote broadcast
+   * has to pick the same organizers the Plan wizard would have shown, and two
+   * matchers would be two answers to one question.
+   */
+  exports: [PlanSubmissionService, PlanConfigService, PlanService],
 })
 export class PlanModule {}

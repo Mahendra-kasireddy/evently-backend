@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { idJsonTransform } from '../../../common/utils/id-transform';
 import { HydratedDocument } from 'mongoose';
+import { StoredFileSchema, StoredFile } from '../../organizer/schemas/organizer-profile.schema';
 
 export type PlanServiceCategoryDocument = HydratedDocument<PlanServiceCategory>;
 
@@ -32,6 +33,16 @@ export class PlanServiceCategory {
   // Keywords used to test an organizer's service tags when scoring matches.
   @Prop({ type: [String], default: [] })
   keywords: string[];
+
+  /**
+   * An optional photograph behind the tile.
+   *
+   * Null is the normal state and not a missing value: the client then draws the
+   * illustration keyed by `icon`, which is what every one of these has always
+   * shown. A photo replaces that illustration for this one tile only.
+   */
+  @Prop({ type: StoredFileSchema, default: null })
+  image?: StoredFile | null;
 
   @Prop({ default: 0, index: true })
   order: number;

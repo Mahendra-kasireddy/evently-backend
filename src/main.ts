@@ -10,7 +10,14 @@ import { SocketIoAdapter } from './common/utils/socket-io.adapter';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule, { bufferLogs: false });
+  /*
+   * `rawBody` is kept so the Razorpay webhook can be verified.
+   *
+   * The signature is an HMAC over the exact bytes Razorpay sent; parsing the
+   * JSON and re-serialising it changes whitespace somewhere and fails every
+   * check. See PaymentController.webhook.
+   */
+  const app = await NestFactory.create(AppModule, { bufferLogs: false, rawBody: true });
   const config = app.get(ConfigService);
 
   const port = config.get<number>('port', 3000);

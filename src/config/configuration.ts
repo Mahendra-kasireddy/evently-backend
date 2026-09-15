@@ -91,6 +91,20 @@ export default () => ({
     privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
   },
 
+  /**
+   * Razorpay. Absent keys are not an error at boot — the app runs without a
+   * gateway and the payment routes say so plainly when they are called, rather
+   * than the whole API refusing to start over a feature most requests do not
+   * touch. `PaymentService.assertConfigured` is where that is decided.
+   */
+  razorpay: {
+    keyId: process.env.RAZORPAY_KEY_ID ?? '',
+    keySecret: process.env.RAZORPAY_KEY_SECRET ?? '',
+    /* Set separately in the Razorpay dashboard; a webhook is verified against
+       this, never against the API key secret. */
+    webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET ?? '',
+  },
+
   // Reusable file-upload module. `driver=s3` for any S3-compatible store
   // (AWS S3, Cloudflare R2, DigitalOcean Spaces, MinIO); `driver=local` for
   // development only (files written under `local.dir`, served via /upload/file).

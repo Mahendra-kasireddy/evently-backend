@@ -2,7 +2,12 @@ import { Injectable } from '@nestjs/common';
 
 import { PlanSubmissionService } from '../plan/plan-submission.service';
 import { PlanStatus, PlanSubmissionDocument } from '../plan/schemas/plan-submission.schema';
-import { QuoteService, OrganizerRef, LatestQuoteSummary } from '../quote/quote.service';
+import {
+  QuoteService,
+  OrganizerRef,
+  LatestQuoteSummary,
+  QuoteRowSummary,
+} from '../quote/quote.service';
 import { QuoteRequestStatus } from '../quote/schemas/quote-request.schema';
 import { BookingService, LatestBookingSummary } from '../booking/booking.service';
 import { BookingStatus } from '../booking/schemas/booking.schema';
@@ -92,6 +97,19 @@ export interface CurrentEvent {
   bookingStatus: BookingStatus | null;
   /** Accepted quotation id, when a quote has been accepted (deep-links booking). */
   quotationId: string | null;
+  /**
+   * The replies themselves, and who has yet to send one.
+   *
+   * Only populated while the customer is still choosing — a booking has no
+   * quotes left to compare. `sentToCount` is 0 on briefs from before
+   * recipients were recorded, and the card says how many arrived rather than
+   * claiming a total it does not know.
+   */
+  quotes: QuoteRowSummary[];
+  sentToCount: number;
+  awaiting: OrganizerRef[];
+  /** Whole days until the brief stops taking quotes; null if it never does. */
+  closesInDays: number | null;
   /** True when the customer has unread notifications (new activity badge). */
   hasNewActivity: boolean;
 }
@@ -131,7 +149,23 @@ export class CurrentEventService {
     private readonly notificationService: NotificationService,
   ) {}
 
-  async resolve(userId: string): Promise<CurrentEvent | null> {
+  /**
+   * Every event this customer currently has on the go, furthest along first.
+   *
+   * Home used to ask only for the winner of this list, which meant a confirmed
+   * booking for December silently covered a brief collecting quotes for
+   * September: two real events, one card, and the customer with no way of
+   * telling from Home that the second one existed. The ranking still decides
+   * the order, but it no longer decides what the customer is allowed to see.
+   *
+   * The list is deduplicated, because the same event can exist as more than one
+   * record:
+   *
+   *  - an ACCEPTED brief that already produced a booking is that booking;
+   *  - a plan that produced a brief is that brief — nothing in the codebase
+   *    ever moves a plan to QUOTED, so it stays SUBMITTED for good.
+   */
+  async resolveAll(userId: string): Promise<CurrentEvent[]> {
     const [plan, quote, booking, unreadCount] = await Promise.all([
       this.planSubmissionService.getLatestActiveForUser(userId),
       this.quoteService.getLatestActiveForUser(userId),
@@ -150,18 +184,36 @@ export class CurrentEventService {
       if (alreadyBooked) activeQuote = null;
     }
 
+    // The brief the booking was made from is the booking, so the customer is
+    // not shown their own event twice under two different stages.
+    if (booking && activeQuote && booking.requestId && booking.requestId === activeQuote.id) {
+      activeQuote = null;
+    }
+
+    // Likewise the plan a live brief was built from.
+    const planCovered =
+      Boolean(plan) && Boolean(activeQuote?.planId) && activeQuote?.planId === plan?._id.toString();
+
     const candidates: CurrentEvent[] = [];
     if (booking) candidates.push(this.fromBooking(booking));
     if (activeQuote) candidates.push(this.fromQuote(activeQuote));
-    if (plan) candidates.push(this.fromPlan(plan));
+    if (plan && !planCovered) candidates.push(this.fromPlan(plan));
 
-    if (candidates.length === 0) return null;
+    if (candidates.length === 0) return [];
 
-    // Furthest-along stage wins; on a tie, the earlier-pushed (booking > quote >
-    // plan) candidate is kept for a stable, source-of-truth ordering.
-    const winner = candidates.reduce((best, c) => (c.rank > best.rank ? c : best));
-    winner.hasNewActivity = unreadCount > 0;
-    return winner;
+    /* Furthest along first; on a tie the order they were pushed in
+       (booking > quote > plan) holds, which `sort` keeps because it is
+       stable. The badge belongs to the account, so it rides on the card the
+       customer sees first. */
+    const ordered = [...candidates].sort((a, b) => b.rank - a.rank);
+    ordered[0].hasNewActivity = unreadCount > 0;
+    return ordered;
+  }
+
+  /** The furthest-along event alone — what the Home hero has always shown. */
+  async resolve(userId: string): Promise<CurrentEvent | null> {
+    const all = await this.resolveAll(userId);
+    return all[0] ?? null;
   }
 
   // --- per-source mappers -----------------------------------------------------
@@ -189,6 +241,11 @@ export class CurrentEventService {
       highestQuote: 0,
       bookingStatus: b.status,
       quotationId: null,
+      // A booking has nothing left to compare.
+      quotes: [],
+      sentToCount: 0,
+      awaiting: [],
+      closesInDays: null,
       hasNewActivity: false,
     };
   }
@@ -214,6 +271,10 @@ export class CurrentEventService {
       highestQuote: q.highestQuote,
       bookingStatus: null,
       quotationId: q.acceptedQuotationId,
+      quotes: q.quotes,
+      sentToCount: q.sentToCount,
+      awaiting: q.awaiting,
+      closesInDays: q.closesInDays,
       hasNewActivity: false,
     };
   }
@@ -243,6 +304,11 @@ export class CurrentEventService {
       quoteCount: 0,
       bookingStatus: null,
       quotationId: null,
+      // A plan has not been sent to anybody yet.
+      quotes: [],
+      sentToCount: 0,
+      awaiting: [],
+      closesInDays: null,
       hasNewActivity: false,
     };
   }

@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Package, PackageDocument } from './schemas/package.schema';
+import { StoredFile } from '../organizer/schemas/organizer-profile.schema';
 import {
   OrganizerProfile,
   OrganizerProfileDocument,
@@ -75,7 +76,19 @@ export class PackageService {
    * list — a count per card would be a query per card.
    */
   async findActiveForCustomer(): Promise<PublicPackageView[]> {
-    const packages = await this.findActive();
+    return this.toCustomerViews(await this.findActive());
+  }
+
+  /**
+   * Package documents as their cards read them.
+   *
+   * Shared by the customer carousel and by an organizer's own list, so a photo
+   * an organizer has just uploaded is described by exactly the same rules the
+   * customer's card will use — including the '' that means "draw the
+   * illustration instead".
+   */
+  private async toCustomerViews(packages: PackageDocument[]): Promise<PublicPackageView[]> {
+    if (packages.length === 0) return [];
     const organizerIds = packages
       .map((p) => p.organizer)
       .filter((id): id is Types.ObjectId => !!id);
@@ -156,5 +169,80 @@ export class PackageService {
     const pkg = await this.packageModel.findById(id).exec();
     if (!pkg) throw new NotFoundException('Package not found');
     return pkg;
+  }
+
+  // ---------------------------------------------------------------------------
+  // The card's banner photo
+  //
+  // A package with no photo is not broken: `photoUrl` comes back '' and the
+  // card draws its occasion illustration, which is what every package does
+  // today. A photo is an upgrade to one card, never a requirement for it.
+  // ---------------------------------------------------------------------------
+
+  /** Every package, in display order — the admin console's list. */
+  async listAllForAdmin(): Promise<PublicPackageView[]> {
+    const rows = await this.packageModel.find().sort({ order: 1, createdAt: -1 }).exec();
+    return this.toCustomerViews(rows);
+  }
+
+  /** The packages this organizer delivers, for their own management screen. */
+  async listForOrganizer(userId: string): Promise<PublicPackageView[]> {
+    const profile = await this.requireOrganizer(userId);
+    const rows = await this.packageModel
+      .find({ organizer: profile._id })
+      .sort({ order: 1, createdAt: -1 })
+      .exec();
+    return this.toCustomerViews(rows);
+  }
+
+  /**
+   * Sets or clears the photo on a package the caller owns.
+   *
+   * The organizer is resolved from the session and compared against the
+   * package's own `organizer`, so there is no request shape in which one
+   * organizer could re-photograph another's package.
+   */
+  async setPhotoForOrganizer(
+    userId: string,
+    packageId: string,
+    photo: StoredFile | null,
+  ): Promise<PublicPackageView> {
+    const profile = await this.requireOrganizer(userId);
+    const pkg = await this.findById(packageId);
+
+    /*
+     * A package belonging to somebody else is a 404 rather than a 403, matching
+     * the coupon rule: an organizer probing ids should not be able to learn
+     * which of them exist.
+     */
+    if (!pkg.organizer || pkg.organizer.toString() !== profile._id.toString()) {
+      throw new NotFoundException('Package not found');
+    }
+
+    return this.savePhoto(pkg, photo);
+  }
+
+  /** The same, for an admin, on any package. */
+  async setPhotoAsAdmin(packageId: string, photo: StoredFile | null): Promise<PublicPackageView> {
+    return this.savePhoto(await this.findById(packageId), photo);
+  }
+
+  private async savePhoto(
+    pkg: PackageDocument,
+    photo: StoredFile | null,
+  ): Promise<PublicPackageView> {
+    pkg.photo = photo ? { ...photo, uploadedAt: photo.uploadedAt ?? new Date() } : null;
+    await pkg.save();
+    const [view] = await this.toCustomerViews([pkg]);
+    return view;
+  }
+
+  private async requireOrganizer(userId: string): Promise<OrganizerProfileDocument> {
+    if (!Types.ObjectId.isValid(userId)) throw new ForbiddenException('Not an organizer.');
+    const profile = await this.organizerModel.findOne({ user: new Types.ObjectId(userId) }).exec();
+    if (!profile) {
+      throw new ForbiddenException('Finish your organizer profile before adding package photos.');
+    }
+    return profile;
   }
 }

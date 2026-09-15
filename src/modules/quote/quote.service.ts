@@ -17,10 +17,33 @@ import { RequestQuoteFromOrganizerDto } from './dto/request-quote-from-organizer
 import { QuotationLineDto, RespondQuotationDto } from './dto/respond-quotation.dto';
 import { UpdateQuotationDto } from './dto/update-quotation.dto';
 import { OrganizerService } from '../organizer/organizer.service';
+import { PlanService } from '../plan/plan.service';
+import {
+  OrganizerProfile,
+  OrganizerProfileDocument,
+} from '../organizer/schemas/organizer-profile.schema';
 import { NotificationService } from '../notification/notification.service';
 import { NotificationType } from '../notification/schemas/notification.schema';
 
 const ORG_FIELDS = 'name initials avatarColor tier rating reviews user';
+
+/**
+ * How long a broadcast stays open for quotes.
+ *
+ * A deadline is what turns "waiting" into "waiting until Friday" — for the
+ * customer deciding when to chase, and for the organizer deciding whether this
+ * is still worth pricing.
+ */
+const QUOTE_RESPONSE_WINDOW_DAYS = 7;
+
+/**
+ * How many organizers one broadcast reaches.
+ *
+ * Bounded because every recipient is a person who gets a notification and is
+ * expected to price the job. Sending one brief to forty organizers is how a
+ * marketplace teaches its supply side to ignore it.
+ */
+const BROADCAST_LIMIT = 6;
 
 /** Minimal organizer identity surfaced on the Home "Current Event" card. */
 export interface OrganizerRef {
@@ -73,8 +96,44 @@ export interface LatestQuoteSummary {
   highestQuote: number;
   acceptedQuotationId: string | null;
   organizer: OrganizerRef | null;
+  /**
+   * The quotes themselves, one row per organizer who replied.
+   *
+   * Enough for the Home card to name each one and show what they asked for,
+   * without a second call to fetch the request the card is already about.
+   */
+  quotes: QuoteRowSummary[];
+  /**
+   * Who the brief went to, who has answered, and who has not — read from the
+   * request's stored recipient list. `sentToCount` is 0 for requests made
+   * before recipients were recorded, and the card then says how many quotes
+   * arrived rather than inventing a denominator.
+   */
+  sentToCount: number;
+  awaiting: OrganizerRef[];
+  /** Whole days until the request stops taking quotes; null if it never does. */
+  closesInDays: number | null;
+  /**
+   * The plan this brief was built from, when the customer used the wizard.
+   *
+   * Home needs it to tell one event from two: a plan and the brief it produced
+   * are the same event, and nothing ever moves that plan out of SUBMITTED, so
+   * without this the customer would see their Naming ceremony twice.
+   */
+  planId: string | null;
   createdAt: Date | undefined;
   updatedAt: Date | undefined;
+}
+
+/** One organizer's reply, as the Home card lists it. */
+export interface QuoteRowSummary {
+  id: string;
+  organizer: OrganizerRef | null;
+  total: number;
+  /** How many priced lines it breaks into — the card says "7 line items". */
+  lineItemCount: number;
+  /** When it landed, so the card can say "2h ago". */
+  repliedAt: Date | undefined;
 }
 
 /** Normalizes a populated organizer ref (or ObjectId) into an OrganizerRef. */
@@ -125,7 +184,10 @@ export class QuoteService {
     private readonly quoteModel: Model<QuoteRequestDocument>,
     @InjectModel(Quotation.name)
     private readonly quotationModel: Model<QuotationDocument>,
+    @InjectModel(OrganizerProfile.name)
+    private readonly organizerModel: Model<OrganizerProfileDocument>,
     private readonly organizerService: OrganizerService,
+    private readonly planService: PlanService,
     private readonly notificationService: NotificationService,
   ) {}
 
@@ -255,8 +317,18 @@ export class QuoteService {
   // ---------------------------------------------------------------------------
 
   /** Open request from the hero draft, broadcast to matched organizers. */
-  createFromDraft(userId: string, dto: RequestQuotesDto): Promise<QuoteRequestDocument> {
-    return this.quoteModel.create({
+  /**
+   * A brief broadcast to the organizers who match it.
+   *
+   * The recipients are resolved and stored rather than left implicit. The old
+   * behaviour — `organizer: null`, matched by every organizer's inbox — meant
+   * the request reached everybody, told nobody, and could not answer "who has
+   * this gone to" for either side.
+   */
+  async createFromDraft(userId: string, dto: RequestQuotesDto): Promise<QuoteRequestDocument> {
+    const recipients = await this.resolveRecipients(dto);
+
+    const request = await this.quoteModel.create({
       customer: new Types.ObjectId(userId),
       organizer: null,
       plan: dto.planId ? new Types.ObjectId(dto.planId) : null,
@@ -267,7 +339,73 @@ export class QuoteService {
       budget: dto.budget ?? '',
       categories: dto.categories ?? [],
       ideas: dto.ideas ?? '',
+      recipients,
+      closesAt: closingDate(),
     });
+
+    await this.notifyRecipients(recipients, dto.occasion);
+    return request;
+  }
+
+  /**
+   * Which organizers a brief goes to.
+   *
+   * Delegated to the recommendation engine the Plan wizard already uses, so
+   * the organizers a customer is shown and the organizers their brief reaches
+   * are chosen by one rule. A second matcher here would be a second answer to
+   * the same question, and the two would drift.
+   */
+  private async resolveRecipients(dto: RequestQuotesDto): Promise<Types.ObjectId[]> {
+    try {
+      const { area, city } = splitWhere(dto.where ?? '');
+      const matched = await this.planService.recommend({
+        categories: dto.categories ?? [],
+        occasion: dto.occasion,
+        guests: dto.guests,
+        budget: dto.budget,
+        city,
+        area,
+      });
+      if (matched.length === 0) {
+        /*
+         * Not an error, but not nothing either: the brief will still be
+         * visible to every organizer (see the inbox query), yet it can never
+         * say who it went to, and the customer's card loses its denominator.
+         * Silence here is what made "sent to 0" impossible to explain.
+         */
+        this.logger.warn(
+          `Brief for "${dto.occasion || 'event'}" matched no organizers — it will be broadcast unaddressed.`,
+        );
+      }
+      return matched.slice(0, BROADCAST_LIMIT).map((m) => new Types.ObjectId(m.id));
+    } catch (error) {
+      /*
+       * A brief that cannot be matched is still a brief. Losing the customer's
+       * request because the recommender failed would be far worse than an
+       * unaddressed one, which the old code produced every time anyway. It is
+       * logged rather than swallowed so the next one is diagnosable.
+       */
+      this.logger.error(
+        `Could not match organizers for a "${dto.occasion || 'event'}" brief; broadcasting unaddressed.`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      return [];
+    }
+  }
+
+  /** Tells each recipient there is something to price. Best-effort per one. */
+  private async notifyRecipients(recipients: Types.ObjectId[], occasion: string): Promise<void> {
+    await Promise.all(
+      recipients.map((id) =>
+        this.notifyOrganizerProfile(
+          id.toString(),
+          'New quote request',
+          `A customer wants quotes for their ${occasion || 'event'}. Reply from your dashboard before it closes.`,
+          NotificationType.QUOTE,
+          '/organizer/quotes',
+        ),
+      ),
+    );
   }
 
   /** Request targeted at a single organizer ("Get quote" on a card). */
@@ -286,6 +424,10 @@ export class QuoteService {
       budget: dto.budget ?? '',
       categories: dto.categories ?? [],
       ideas: dto.ideas ?? '',
+      // One recipient, recorded the same way a broadcast records six, so every
+      // request answers "who was this sent to" the same way.
+      recipients: [new Types.ObjectId(dto.organizerId)],
+      closesAt: closingDate(),
     });
     await this.notifyOrganizerProfile(
       dto.organizerId,
@@ -425,6 +567,21 @@ export class QuoteService {
       ...this.spread(quotations.map((q) => q.grandTotal ?? 0)),
       acceptedQuotationId: accepted?._id.toString() ?? null,
       organizer: toOrganizerRef(organizerDoc),
+      /* Cheapest first: the card's rows are a comparison, and a comparison
+         that arrives in the order organizers happened to reply is not one. */
+      quotes: quotations
+        .map((q) => ({
+          id: q._id.toString(),
+          organizer: toOrganizerRef(q.organizer),
+          total: q.grandTotal ?? 0,
+          lineItemCount: (q.lineItems ?? []).length,
+          repliedAt: q.updatedAt ?? q.createdAt,
+        }))
+        .sort((a, b) => a.total - b.total),
+      sentToCount: (request.recipients ?? []).length,
+      awaiting: await this.awaitingOrganizers(request, quotations),
+      closesInDays: request.closesAt ? daysUntil(request.closesAt) : null,
+      planId: request.plan ? request.plan.toString() : null,
       createdAt: request.createdAt,
       updatedAt: request.updatedAt,
     };
@@ -496,6 +653,61 @@ export class QuoteService {
       createdAt: request.createdAt,
       quotations: quotations.map((q) => this.quotationView(q)),
       timeline: this.buildTimeline(request, quotations),
+      ...(await this.responseState(request, quotations)),
+    };
+  }
+
+  /** The recipients who have not sent a quote yet, named. */
+  private async awaitingOrganizers(
+    request: QuoteRequestDocument,
+    quotations: QuotationDocument[],
+  ): Promise<OrganizerRef[]> {
+    const replied = new Set(
+      quotations
+        .map((q) => (q.organizer as unknown as { _id?: Types.ObjectId })?._id?.toString())
+        .filter(Boolean) as string[],
+    );
+    const waiting = (request.recipients ?? []).filter((id) => !replied.has(id.toString()));
+    if (waiting.length === 0) return [];
+
+    const rows = await this.organizerModel
+      .find({ _id: { $in: waiting } })
+      .select('name initials avatarColor')
+      .exec();
+    return rows.map((o) => toOrganizerRef(o)).filter(Boolean) as OrganizerRef[];
+  }
+
+  /**
+   * Who the brief reached, who answered, and how long is left.
+   *
+   * Every figure comes from the stored recipient list, so "3 of 4 replied" is
+   * a count of real organizers rather than a count of quotes dressed up as
+   * one. A request from before recipients were recorded reports what it can —
+   * the replies — and says nothing about who else it went to, instead of
+   * inventing a denominator.
+   */
+  private async responseState(
+    request: QuoteRequestDocument,
+    quotations: QuotationDocument[],
+  ): Promise<Record<string, unknown>> {
+    const recipients = request.recipients ?? [];
+    const replied = new Set(
+      quotations
+        .map((q) => (q.organizer as unknown as { _id?: Types.ObjectId })?._id?.toString())
+        .filter(Boolean) as string[],
+    );
+
+    const closesAt = request.closesAt ?? null;
+    return {
+      sentToCount: recipients.length,
+      repliedCount: replied.size,
+      /* Named, because "one organizer hasn't replied" is a fact the customer
+         can act on and "3 of 4" on its own is not. */
+      awaiting: await this.awaitingOrganizers(request, quotations),
+      closesAt,
+      /* Null rather than 0 when there is no deadline — a request that never
+         closes must not render as one closing today. */
+      closesInDays: closesAt ? daysUntil(closesAt) : null,
     };
   }
 
@@ -530,6 +742,13 @@ export class QuoteService {
       .exec();
 
     return (ids as Types.ObjectId[]).filter(Boolean).map((id) => id.toString());
+  }
+
+  /** An organizer's display name, for a screen that has only their id. */
+  async organizerNameById(organizerId: string): Promise<string> {
+    if (!Types.ObjectId.isValid(organizerId)) return '';
+    const organizer = await this.organizerModel.findById(organizerId).select('name').exec();
+    return organizer?.name ?? '';
   }
 
   async getBookingSeed(userId: string, quotationId: string): Promise<BookingSeed> {
@@ -699,7 +918,17 @@ export class QuoteService {
     const profileId = await this.organizerProfileId(organizerUserId);
     const requests = await this.quoteModel
       .find({
-        $or: [{ organizer: profileId }, { organizer: null }],
+        $or: [
+          // Sent to this organizer by name, or included in a broadcast.
+          { organizer: profileId },
+          { recipients: profileId },
+          /*
+           * Requests from before recipients were recorded. They were broadcast
+           * to everyone by having no organizer at all, and they keep that
+           * behaviour rather than vanishing from every inbox at once.
+           */
+          { organizer: null, recipients: { $size: 0 } },
+        ],
         status: { $ne: QuoteRequestStatus.CANCELLED },
       })
       // This list is the organizer's inbox, so it has to say *who* is asking.
@@ -881,4 +1110,35 @@ export class QuoteService {
     const populated = await q.populate('organizer', ORG_FIELDS);
     return this.quotationView(populated);
   }
+}
+
+// ---------------------------------------------------------------------------
+
+/** The deadline a request created now would carry. */
+function closingDate(): Date {
+  const closes = new Date();
+  closes.setDate(closes.getDate() + QUOTE_RESPONSE_WINDOW_DAYS);
+  return closes;
+}
+
+/** Whole days left, floored at 0 — a closed request is not "-2 days". */
+function daysUntil(when: Date): number {
+  const ms = new Date(when).getTime() - Date.now();
+  return Math.max(0, Math.ceil(ms / (24 * 60 * 60 * 1000)));
+}
+
+/**
+ * "Kukatpally, Hyderabad" -> { area, city }.
+ *
+ * The city is the last part, because an area name can itself contain a comma
+ * and the city never does.
+ */
+function splitWhere(where: string): { area: string; city: string } {
+  const parts = (where ?? '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return { area: '', city: '' };
+  if (parts.length === 1) return { area: '', city: parts[0] };
+  return { area: parts.slice(0, -1).join(', '), city: parts[parts.length - 1] };
 }

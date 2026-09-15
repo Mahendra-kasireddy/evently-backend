@@ -84,4 +84,22 @@ export const envValidationSchema = Joi.object({
   S3_BUCKET: Joi.string().when('UPLOAD_DRIVER', { is: 's3', then: Joi.required() }),
   S3_ACCESS_KEY_ID: Joi.string().when('UPLOAD_DRIVER', { is: 's3', then: Joi.required() }),
   S3_SECRET_ACCESS_KEY: Joi.string().when('UPLOAD_DRIVER', { is: 's3', then: Joi.required() }),
+
+  /*
+   * Razorpay. Optional so the API boots without a gateway; the payment routes
+   * refuse clearly when they are missing. A key id without its secret is
+   * rejected, because that combination cannot do anything but fail later.
+   */
+  RAZORPAY_KEY_ID: Joi.string().allow('').optional(),
+  RAZORPAY_KEY_SECRET: Joi.string()
+    .allow('')
+    .optional()
+    /* `required()` inside `is` matters: without it an absent RAZORPAY_KEY_ID
+       still satisfies the condition, and the API refuses to boot for a feature
+       nobody configured. */
+    .when('RAZORPAY_KEY_ID', {
+      is: Joi.string().min(1).required(),
+      then: Joi.string().min(1).required(),
+    }),
+  RAZORPAY_WEBHOOK_SECRET: Joi.string().allow('').optional(),
 });
