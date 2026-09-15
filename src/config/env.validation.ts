@@ -18,6 +18,7 @@ export const envValidationSchema = Joi.object({
   REDIS_PORT: Joi.number().default(6379),
   REDIS_PASSWORD: Joi.string().allow('').optional(),
   REDIS_DB: Joi.number().default(0),
+  REDIS_TLS: Joi.boolean().default(false),
   BULLMQ_PREFIX: Joi.string().default('evently'),
 
   // JWT — secrets must be strong (>=32 chars); rejects scaffolding placeholders at boot.

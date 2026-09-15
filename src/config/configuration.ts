@@ -18,6 +18,14 @@ export default () => ({
     password: process.env.REDIS_PASSWORD || undefined,
     db: parseInt(process.env.REDIS_DB ?? '0', 10),
     prefix: process.env.BULLMQ_PREFIX ?? 'evently',
+    /*
+     * Managed Redis (Upstash, Redis Cloud, Render's external URL) speaks TLS
+     * and advertises itself as `rediss://`. ioredis only negotiates TLS when it
+     * is handed a `tls` option, so a plain host/port/password against one of
+     * those hangs and then fails the handshake. Set REDIS_TLS=true there; a
+     * local redis:7-alpine container needs it off.
+     */
+    tls: (process.env.REDIS_TLS ?? 'false') === 'true',
   },
 
   jwt: {

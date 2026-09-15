@@ -59,6 +59,8 @@ import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
           port: config.get<number>('redis.port'),
           password: config.get<string>('redis.password'),
           db: config.get<number>('redis.db'),
+          // `{}` = TLS with default verification; undefined = plaintext.
+          ...(config.get<boolean>('redis.tls') ? { tls: {} } : {}),
         },
         prefix: config.get<string>('redis.prefix'),
       }),
