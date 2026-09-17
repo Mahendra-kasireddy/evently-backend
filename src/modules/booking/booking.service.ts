@@ -558,29 +558,53 @@ export class BookingService {
     };
   }
 
+  /** Non-terminal statuses — a booking Home should still be following. */
+  private static readonly TERMINAL_BOOKING_STATUSES = [
+    BookingStatus.CANCELLED,
+    BookingStatus.REJECTED,
+    BookingStatus.COMPLETED,
+  ];
+
   /**
-   * Latest *live* booking for the Home "Current Event" resolver — any non-
-   * terminal status (pending → confirmed → in_progress → completed), so the
-   * card can follow the booking from creation through delivery. Terminal
-   * bookings (completed, cancelled, rejected) are excluded so the Home widget
-   * only reflects *live* events — completed events live in My Events history.
-   * Returns null when there is none.
+   * Every *live* booking for the Home "Current Event" resolver — any non-
+   * terminal status (pending → confirmed → in_progress), newest first. Terminal
+   * bookings (completed, cancelled, rejected) are excluded so Home only
+   * reflects live events; completed ones live in My Events history.
+   *
+   * This used to be a `findOne`, and that was the bug: a customer with three
+   * confirmed bookings had two of them invisible on Home, because the feed
+   * could only ever be handed one. Home ranks and slices what it shows; the
+   * service's job is to say what exists.
    *
    * Reuses the bookings collection consumed by the workspace — no duplicated data.
    */
-  async getLatestForUser(userId: string): Promise<LatestBookingSummary | null> {
-    const booking = await this.bookingModel
-      .findOne({
+  async getAllLiveForUser(userId: string): Promise<LatestBookingSummary[]> {
+    const bookings = await this.bookingModel
+      .find({
         customer: new Types.ObjectId(userId),
-        status: {
-          $nin: [BookingStatus.CANCELLED, BookingStatus.REJECTED, BookingStatus.COMPLETED],
-        },
+        status: { $nin: BookingService.TERMINAL_BOOKING_STATUSES },
       })
       .populate('organizer', 'name initials avatarColor tier rating')
       .sort({ createdAt: -1 })
       .exec();
-    if (!booking) return null;
 
+    // Mapped in parallel: each summary needs its brief's guest count, and doing
+    // those in sequence would make Home's latency scale with the customer's
+    // booking count.
+    return Promise.all(bookings.map((booking) => this.toBookingSummary(booking)));
+  }
+
+  /**
+   * The newest live booking, or null. Kept for callers that genuinely want one
+   * — it is the first of {@link getAllLiveForUser}, by the same ordering.
+   */
+  async getLatestForUser(userId: string): Promise<LatestBookingSummary | null> {
+    const [latest] = await this.getAllLiveForUser(userId);
+    return latest ?? null;
+  }
+
+  /** One booking document, as the Home resolver wants to read it. */
+  private async toBookingSummary(booking: BookingDocument): Promise<LatestBookingSummary> {
     const org = booking.organizer as unknown as Record<string, unknown> | undefined;
     const organizer =
       org && typeof org === 'object' && 'name' in org

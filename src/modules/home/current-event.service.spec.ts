@@ -87,20 +87,34 @@ function serviceWith({
   latestPlan = null,
   latestBrief = null,
   latestBooking = null,
+  activePlans,
+  activeBriefs,
+  liveBookings,
   bookedFromRequest = false,
   unread = 0,
 }: {
+  /* The three singular options are shorthand — most cases only need one of
+     each, and reading `latestBooking: booking()` says so more plainly than a
+     one-element array. The plural ones are for the cases that are about there
+     being several. */
   latestPlan?: unknown;
   latestBrief?: unknown;
   latestBooking?: unknown;
+  activePlans?: unknown[];
+  activeBriefs?: unknown[];
+  liveBookings?: unknown[];
   bookedFromRequest?: boolean;
   unread?: number;
 } = {}) {
+  const one = (single: unknown) => (single ? [single] : []);
+  const plans = activePlans ?? one(latestPlan);
+  const briefs = activeBriefs ?? one(latestBrief);
+  const bookings = liveBookings ?? one(latestBooking);
   return new CurrentEventService(
-    { getLatestActiveForUser: jest.fn().mockResolvedValue(latestPlan) } as never,
-    { getLatestActiveForUser: jest.fn().mockResolvedValue(latestBrief) } as never,
+    { getAllActiveForUser: jest.fn().mockResolvedValue(plans) } as never,
+    { getAllActiveForUser: jest.fn().mockResolvedValue(briefs) } as never,
     {
-      getLatestForUser: jest.fn().mockResolvedValue(latestBooking),
+      getAllLiveForUser: jest.fn().mockResolvedValue(bookings),
       existsForRequest: jest.fn().mockResolvedValue(bookedFromRequest),
     } as never,
     { unreadCount: jest.fn().mockResolvedValue(unread) } as never,
@@ -158,6 +172,135 @@ describe('showing every live event', () => {
   it('has nothing to show for an account with nothing on', async () => {
     expect(await serviceWith().resolveAll(USER)).toEqual([]);
     expect(await serviceWith().resolve(USER)).toBeNull();
+  });
+});
+
+describe('every booking the customer has', () => {
+  /*
+   * The reported bug. `getLatestForUser` was a `findOne`, so a customer with
+   * three confirmed bookings had two of them invisible on Home — not ranked
+   * below something, not collapsed into a card: never sent at all.
+   */
+  it('returns one event per live booking', async () => {
+    const events = await serviceWith({
+      liveBookings: [
+        booking({ id: 'bk1', title: 'Anniversary' }),
+        booking({ id: 'bk2', title: 'Naming ceremony' }),
+        booking({ id: 'bk3', title: 'Housewarming' }),
+      ],
+    }).resolveAll(USER);
+
+    expect(events.map((e) => e.title)).toEqual(['Anniversary', 'Naming ceremony', 'Housewarming']);
+    expect(events.every((e) => e.source === 'booking')).toBe(true);
+  });
+
+  it('keeps them newest first, the order they arrived in', async () => {
+    // The sort is by stage rank and stable, so bookings on one rank hold the
+    // order the query returned — which is `createdAt` descending.
+    const events = await serviceWith({
+      liveBookings: [
+        booking({ id: 'bk1', title: 'Newest' }),
+        booking({ id: 'bk2', title: 'Older' }),
+      ],
+    }).resolveAll(USER);
+
+    expect(events.map((e) => e.title)).toEqual(['Newest', 'Older']);
+  });
+
+  it('drops a brief that any of them was made from, not just the newest', async () => {
+    // The dedupe used to compare against one booking. With several, a brief
+    // booked through an older one came back as a second card for one event.
+    const events = await serviceWith({
+      liveBookings: [
+        booking({ id: 'bk1', requestId: 'req-other' }),
+        booking({ id: 'bk2', requestId: 'req1' }),
+      ],
+      latestBrief: brief({ id: 'req1' }),
+    }).resolveAll(USER);
+
+    expect(events.filter((e) => e.source === 'quote')).toEqual([]);
+    expect(events).toHaveLength(2);
+  });
+
+  it('still shows the hero the furthest-along one', async () => {
+    const service = serviceWith({
+      liveBookings: [booking({ id: 'bk1', title: 'Anniversary' }), booking({ id: 'bk2' })],
+    });
+    expect((await service.resolve(USER))?.title).toBe('Anniversary');
+  });
+});
+
+describe('every brief and plan the customer has', () => {
+  /*
+   * What the customer reported: "I created event plans and submitted
+   * requests — none of those records are showing." Both resolvers were
+   * `findOne`, so every account was capped at one plan and one brief no matter
+   * how many it had.
+   */
+  it('returns one event per active brief', async () => {
+    const events = await serviceWith({
+      activeBriefs: [
+        brief({ id: 'req1', occasion: 'Corporate' }),
+        brief({ id: 'req2', occasion: 'Wedding' }),
+        brief({ id: 'req3', occasion: 'Naming' }),
+      ],
+    }).resolveAll(USER);
+
+    expect(events).toHaveLength(3);
+    expect(events.every((e) => e.source === 'quote')).toBe(true);
+  });
+
+  it('returns one event per active plan', async () => {
+    const events = await serviceWith({
+      activePlans: [plan({ _id: 'p1' }), plan({ _id: 'p2' })],
+    }).resolveAll(USER);
+
+    expect(events).toHaveLength(2);
+    expect(events.every((e) => e.source === 'plan')).toBe(true);
+  });
+
+  it('drops only the plans their own brief covers', async () => {
+    /*
+     * The dedupe used to compare one plan against one brief. Across lists it
+     * has to match them up: a customer with two plans, one of which became a
+     * brief, has two events — the brief and the untouched plan — not one, and
+     * not three.
+     */
+    const events = await serviceWith({
+      activePlans: [plan({ _id: 'p1' }), plan({ _id: 'p2' })],
+      activeBriefs: [brief({ id: 'req1', planId: 'p1' })],
+    }).resolveAll(USER);
+
+    expect(events).toHaveLength(2);
+    expect(events.filter((e) => e.source === 'plan')).toHaveLength(1);
+    expect(events.filter((e) => e.source === 'quote')).toHaveLength(1);
+  });
+
+  it('keeps a newer open brief when an older one has been booked', async () => {
+    // Per brief, not once for the account: an older accepted brief can have a
+    // finished booking while a newer one is still collecting quotes.
+    const events = await serviceWith({
+      activeBriefs: [
+        brief({ id: 'req-new', occasion: 'Wedding' }),
+        brief({ id: 'req-old', occasion: 'Corporate' }),
+      ],
+      liveBookings: [booking({ id: 'bk1', requestId: 'req-old' })],
+    }).resolveAll(USER);
+
+    expect(events.map((e) => e.source)).toEqual(['booking', 'quote']);
+    expect(events.find((e) => e.source === 'quote')?.refId).toBe('req-new');
+  });
+
+  it('lists every record of every kind for a busy account', async () => {
+    const events = await serviceWith({
+      activePlans: [plan({ _id: 'p1' })],
+      activeBriefs: [brief({ id: 'req1' }), brief({ id: 'req2' })],
+      liveBookings: [booking({ id: 'bk1' }), booking({ id: 'bk2' })],
+    }).resolveAll(USER);
+
+    expect(events).toHaveLength(5);
+    // Furthest along first, and stable within a stage.
+    expect(events.map((e) => e.source)).toEqual(['booking', 'booking', 'quote', 'quote', 'plan']);
   });
 });
 

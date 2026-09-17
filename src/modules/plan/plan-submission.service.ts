@@ -108,19 +108,33 @@ export class PlanSubmissionService {
   }
 
   /**
-   * The customer's most recent *active* plan (draft or submitted), used by the
-   * Home "Current Event" resolver. BOOKED/CANCELLED plans are excluded — once a
-   * plan is booked the booking record is the source of truth, and cancelled
-   * plans are not "current". Returns null when there is none.
+   * Every *active* plan (draft or submitted), most recently updated first, for
+   * the Home "Current Event" resolver. BOOKED/CANCELLED plans are excluded —
+   * once a plan is booked the booking record is the source of truth, and
+   * cancelled plans are not "current".
+   *
+   * This was a `findOne`, and that was the bug: a customer who had started
+   * three plans saw one of them on Home and had no way to tell the others
+   * still existed. Home ranks and slices what it shows; the service's job is
+   * to say what exists.
    */
-  getLatestActiveForUser(userId: string): Promise<PlanSubmissionDocument | null> {
+  getAllActiveForUser(userId: string): Promise<PlanSubmissionDocument[]> {
     return this.planModel
-      .findOne({
+      .find({
         customer: this.toObjectId(userId),
         status: { $in: [PlanStatus.DRAFT, PlanStatus.SUBMITTED] },
       })
       .sort({ updatedAt: -1 })
       .exec();
+  }
+
+  /**
+   * The most recently updated active plan, or null. Kept for callers that
+   * genuinely want one — it is the first of {@link getAllActiveForUser}.
+   */
+  async getLatestActiveForUser(userId: string): Promise<PlanSubmissionDocument | null> {
+    const [latest] = await this.getAllActiveForUser(userId);
+    return latest ?? null;
   }
 
   async findOne(userId: string, id: string): Promise<PlanSubmissionDocument> {

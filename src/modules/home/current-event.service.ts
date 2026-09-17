@@ -166,45 +166,69 @@ export class CurrentEventService {
    *    ever moves a plan to QUOTED, so it stays SUBMITTED for good.
    */
   async resolveAll(userId: string): Promise<CurrentEvent[]> {
-    const [plan, quote, booking, unreadCount] = await Promise.all([
-      this.planSubmissionService.getLatestActiveForUser(userId),
-      this.quoteService.getLatestActiveForUser(userId),
-      // Live bookings only — terminal (completed/cancelled/rejected) excluded.
-      this.bookingService.getLatestForUser(userId),
+    const [plans, quotes, bookings, unreadCount] = await Promise.all([
+      /*
+       * Every active plan and every active brief, not just the newest of each.
+       * These were `getLatestActiveForUser`, and a customer who had submitted
+       * three requests saw one — the rest were never sent to the app at all.
+       */
+      this.planSubmissionService.getAllActiveForUser(userId),
+      this.quoteService.getAllActiveForUser(userId),
+      /*
+       * Every live booking, not just the newest. This was `getLatestForUser`,
+       * and a customer with three confirmed bookings saw one of them on Home
+       * and had no way to tell the other two were still there — the feed could
+       * only ever carry one.
+       */
+      this.bookingService.getAllLiveForUser(userId),
       this.notificationService.unreadCount(userId),
     ]);
 
-    // An accepted quote whose booking already exists is represented by that
-    // booking, not by the quote. If the booking is live it is a candidate below;
-    // if it has since completed/cancelled, the event is terminal and must NOT
-    // resurface on Home via the lingering ACCEPTED request. So drop it here.
-    let activeQuote = quote;
-    if (activeQuote && activeQuote.status === QuoteRequestStatus.ACCEPTED) {
-      const alreadyBooked = await this.bookingService.existsForRequest(userId, activeQuote.id);
-      if (alreadyBooked) activeQuote = null;
-    }
+    /*
+     * The same event can exist as more than one record, so each list is
+     * filtered against the ones further along. This used to compare three
+     * single records; with three lists it is the same two rules applied per
+     * item, which is what stops a customer's four briefs turning into four
+     * briefs plus the four plans they were built from.
+     */
 
-    // The brief the booking was made from is the booking, so the customer is
-    // not shown their own event twice under two different stages.
-    if (booking && activeQuote && booking.requestId && booking.requestId === activeQuote.id) {
-      activeQuote = null;
+    // A brief whose booking already exists is represented by that booking. If
+    // the booking is live it is a candidate below; if it has since completed or
+    // been cancelled the event is terminal and must NOT resurface on Home via
+    // the lingering ACCEPTED request. Either way the brief is dropped.
+    const bookedRequestIds = new Set(
+      bookings.map((b) => b.requestId).filter((id): id is string => Boolean(id)),
+    );
+    const activeQuotes: LatestQuoteSummary[] = [];
+    for (const quote of quotes) {
+      if (bookedRequestIds.has(quote.id)) continue;
+      if (quote.status === QuoteRequestStatus.ACCEPTED) {
+        // Checked per brief rather than once: an older accepted brief can have
+        // a finished booking while a newer one is still open.
+        const alreadyBooked = await this.bookingService.existsForRequest(userId, quote.id);
+        if (alreadyBooked) continue;
+      }
+      activeQuotes.push(quote);
     }
 
     // Likewise the plan a live brief was built from.
-    const planCovered =
-      Boolean(plan) && Boolean(activeQuote?.planId) && activeQuote?.planId === plan?._id.toString();
+    const coveredPlanIds = new Set(
+      activeQuotes.map((q) => q.planId).filter((id): id is string => Boolean(id)),
+    );
+    const activePlans = plans.filter((plan) => !coveredPlanIds.has(plan._id.toString()));
 
     const candidates: CurrentEvent[] = [];
-    if (booking) candidates.push(this.fromBooking(booking));
-    if (activeQuote) candidates.push(this.fromQuote(activeQuote));
-    if (plan && !planCovered) candidates.push(this.fromPlan(plan));
+    for (const booking of bookings) candidates.push(this.fromBooking(booking));
+    for (const quote of activeQuotes) candidates.push(this.fromQuote(quote));
+    for (const plan of activePlans) candidates.push(this.fromPlan(plan));
 
     if (candidates.length === 0) return [];
 
     /* Furthest along first; on a tie the order they were pushed in
        (booking > quote > plan) holds, which `sort` keeps because it is
-       stable. The badge belongs to the account, so it rides on the card the
-       customer sees first. */
+       stable — and among bookings that is newest first, the order they
+       arrived in. The badge belongs to the account, so it rides on the card
+       the customer sees first. */
     const ordered = [...candidates].sort((a, b) => b.rank - a.rank);
     ordered[0].hasNewActivity = unreadCount > 0;
     return ordered;

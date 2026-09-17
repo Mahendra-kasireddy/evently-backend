@@ -522,17 +522,22 @@ export class QuoteService {
   }
 
   /**
-   * Latest *active* quote request for the Home "Current Event" resolver, plus a
-   * live count of received quotes and the assigned organizer (targeted request
-   * or, once accepted, the winning quotation's organizer). Cancelled/closed
-   * requests are excluded. Returns null when there is none.
+   * Every *active* quote request for the Home "Current Event" resolver, newest
+   * first — each with a live count of received quotes and the assigned
+   * organizer (targeted request or, once accepted, the winning quotation's
+   * organizer). Cancelled/closed requests are excluded.
+   *
+   * This was a `findOne`, and that was the bug: a customer who had submitted
+   * three briefs saw one of them on Home and had no way to tell the other two
+   * were still open. Home ranks and slices what it shows; the service's job is
+   * to say what exists.
    *
    * Reuses the same collections as the workspace/quotes screens — no new data.
    */
-  async getLatestActiveForUser(userId: string): Promise<LatestQuoteSummary | null> {
+  async getAllActiveForUser(userId: string): Promise<LatestQuoteSummary[]> {
     const customer = new Types.ObjectId(userId);
-    const request = await this.quoteModel
-      .findOne({
+    const requests = await this.quoteModel
+      .find({
         customer,
         status: {
           $in: [QuoteRequestStatus.OPEN, QuoteRequestStatus.QUOTED, QuoteRequestStatus.ACCEPTED],
@@ -541,8 +546,23 @@ export class QuoteService {
       .populate('organizer', ORG_FIELDS)
       .sort({ createdAt: -1 })
       .exec();
-    if (!request) return null;
 
+    // In parallel: each summary needs its own quotations, and doing those in
+    // sequence would make Home's latency scale with the customer's brief count.
+    return Promise.all(requests.map((request) => this.toQuoteSummary(request)));
+  }
+
+  /**
+   * The newest active quote request, or null. Kept for callers that genuinely
+   * want one — it is the first of {@link getAllActiveForUser}.
+   */
+  async getLatestActiveForUser(userId: string): Promise<LatestQuoteSummary | null> {
+    const [latest] = await this.getAllActiveForUser(userId);
+    return latest ?? null;
+  }
+
+  /** One quote request, as the Home resolver wants to read it. */
+  private async toQuoteSummary(request: QuoteRequestDocument): Promise<LatestQuoteSummary> {
     // Live quotes: exclude withdrawn ones (and organizers' unsent drafts) so
     // the count matches what the customer can actually act on.
     const quotations = await this.quotationModel
