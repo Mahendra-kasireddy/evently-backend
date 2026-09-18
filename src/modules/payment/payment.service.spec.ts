@@ -77,14 +77,26 @@ function serviceWith(found: OrderLike | null, { configured = true } = {}) {
   const config = { get: jest.fn((key: string) => values[key] ?? '') };
   const bookingService = { createFromQuotation: jest.fn().mockResolvedValue({ id: 'bk1' }) };
 
+  /* Enough of the quote service for pricing: what is owed is read from the
+     quotation, which is exactly why it can be stated with no gateway. */
+  const quoteService = {
+    getBookingSeed: jest.fn().mockResolvedValue({
+      customerId: CUSTOMER.toString(),
+      organizerId: null,
+      amount: 684000,
+      advancePercentage: 30,
+    }),
+    organizerNameById: jest.fn().mockResolvedValue('Mahendra Events'),
+  };
+
   const service = new PaymentService(
     orderModel as never,
     config as never,
-    {} as never,
+    quoteService as never,
     {} as never,
     bookingService as never,
   );
-  return { service, orderModel, bookingService };
+  return { service, orderModel, bookingService, quoteService };
 }
 
 describe('configuration', () => {
@@ -93,12 +105,41 @@ describe('configuration', () => {
     expect(serviceWith(null, { configured: false }).service.isConfigured()).toBe(false);
   });
 
-  it('refuses to take a payment it cannot take, rather than half-working', async () => {
-    // A payment screen that silently does nothing is worse than one that says
-    // it cannot take money right now.
+  it('still prices the advance with no gateway, and says there is none', async () => {
+    /*
+     * This used to throw, which failed the entire payment screen with
+     * "payments are not available" — including for a customer who wanted to
+     * pay their organizer in cash, which needs no gateway at all. What is owed
+     * is a fact about the quotation, so it can always be stated; only the
+     * Razorpay order depends on keys.
+     */
+    const { service, orderModel } = serviceWith(null, { configured: false });
+    const view = await service.createOrder(CUSTOMER.toString(), {
+      quotationId: QUOTATION.toString(),
+    });
+
+    expect(view.gatewayAvailable).toBe(false);
+    expect(view.advanceAmount).toBe(205200);
+    expect(view.totalAmount).toBe(684000);
+    expect(view.balanceAmount).toBe(478800);
+    // Nothing to pay with, and nothing claiming to be.
+    expect(view.orderId).toBe('');
+    expect(view.keyId).toBe('');
+    /* And no order row: a CREATED row that can never be paid is a payment
+       attempt in the database that never happened. */
+    expect(orderModel.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses to verify a payment it has no keys to check', async () => {
+    // Pricing needs no gateway; confirming a signature does. A client claiming
+    // a payment succeeded must never be believed on its own word.
     const { service } = serviceWith(null, { configured: false });
     await expect(
-      service.createOrder(CUSTOMER.toString(), { quotationId: QUOTATION.toString() }),
+      service.verifyAndBook(CUSTOMER.toString(), {
+        razorpayOrderId: 'order_ABC',
+        razorpayPaymentId: 'pay_ABC',
+        razorpaySignature: 'sig',
+      }),
     ).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 });

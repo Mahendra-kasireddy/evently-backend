@@ -16,6 +16,24 @@ export enum PaymentOrderStatus {
   FAILED = 'failed',
   /** Given back, because the booking it paid for never happened. */
   REFUNDED = 'refunded',
+  /**
+   * The advance is owed to the organizer in cash, and nobody has handed it
+   * over yet.
+   *
+   * Deliberately not PAID. Evently is not holding this money and cannot refund
+   * it, so calling it paid would put a guarantee on the payment screen that
+   * nothing here can keep. It becomes PAID only when the organizer says the
+   * cash reached them.
+   */
+  CASH_DUE = 'cash_due',
+}
+
+/** How the advance is being settled. */
+export enum PaymentMethod {
+  /** Through Razorpay, with Evently in the middle. */
+  ONLINE = 'online',
+  /** Hand to hand, between the customer and the organizer. */
+  CASH = 'cash',
 }
 
 /**
@@ -41,9 +59,18 @@ export class PaymentOrder {
   @Prop({ type: Types.ObjectId, ref: 'Quotation', required: true, index: true })
   quotation: Types.ObjectId;
 
-  /** Razorpay's order id (`order_...`), unique per attempt. */
-  @Prop({ required: true, trim: true })
+  /**
+   * Razorpay's order id (`order_...`), unique per attempt.
+   *
+   * Empty on a cash order: no gateway was involved, so there is no order to
+   * name. The uniqueness index skips those rows rather than treating every
+   * cash booking as a duplicate of the last one.
+   */
+  @Prop({ trim: true, default: '' })
   razorpayOrderId: string;
+
+  @Prop({ type: String, enum: PaymentMethod, default: PaymentMethod.ONLINE, index: true })
+  method: PaymentMethod;
 
   /** Razorpay's payment id (`pay_...`), known only once it is paid. */
   @Prop({ trim: true, default: '' })
@@ -115,5 +142,13 @@ export class PaymentOrder {
 
 export const PaymentOrderSchema = SchemaFactory.createForClass(PaymentOrder);
 
-/** One record per Razorpay order — the webhook and the client both key on it. */
-PaymentOrderSchema.index({ razorpayOrderId: 1 }, { unique: true });
+/**
+ * One record per Razorpay order — the webhook and the client both key on it.
+ *
+ * Partial, because cash orders carry no gateway id: a plain unique index would
+ * let exactly one of them exist and reject every cash booking after the first.
+ */
+PaymentOrderSchema.index(
+  { razorpayOrderId: 1 },
+  { unique: true, partialFilterExpression: { razorpayOrderId: { $gt: '' } } },
+);

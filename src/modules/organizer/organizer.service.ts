@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import {
+  OnboardingStatus,
   OrganizerProfile,
   OrganizerProfileDocument,
   StoredFile,
@@ -77,6 +78,28 @@ export interface PublicOrganizerView {
   certificates: FileView[];
   awards: FileView[];
   createdAt: string | null;
+
+  /**
+   * What Evently itself vouches for, as booleans only.
+   *
+   * The PAN, GST and government-ID numbers behind these stay private — a
+   * customer needs to know the paperwork was checked, not what is on it. An
+   * organizer is `verified` only once an admin has passed them through gate 2
+   * (OnboardingStatus.APPROVED); `kycOnFile` and `gstOnFile` say which
+   * documents that check had in front of it.
+   */
+  verified: boolean;
+  kycOnFile: boolean;
+  gstOnFile: boolean;
+
+  /**
+   * The soonest date this organizer is free, as yyyy-mm-dd, and how many of
+   * their working days that week are still open. Derived from `busyDates` and
+   * `workingDays` so the profile can say it without publishing the whole
+   * calendar of who they are already booked with.
+   */
+  nextFreeDate: string | null;
+  slotsLeftThatWeek: number;
 }
 
 /**
@@ -271,6 +294,70 @@ export class OrganizerService {
       certificates: this.fileViews(doc.certificates),
       awards: this.fileViews(doc.awards),
       createdAt: doc.get('createdAt')?.toISOString?.() ?? null,
+      verified: doc.onboardingStatus === OnboardingStatus.APPROVED,
+      kycOnFile: Boolean(doc.governmentIdFile && doc.panNumber),
+      gstOnFile: Boolean(doc.gstNumber),
+      ...this.availabilityView(doc),
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Availability
+  // ---------------------------------------------------------------------------
+
+  /** Mongo stores working days as the config keys "mon" … "sun". */
+  private static readonly DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+  /** How far ahead we will look for a free date before giving up on the claim. */
+  private static readonly AVAILABILITY_HORIZON_DAYS = 120;
+
+  private static isoDay(date: Date): string {
+    return date.toISOString().slice(0, 10);
+  }
+
+  /**
+   * The soonest free date and how open that week still is.
+   *
+   * An organizer who has not set working days is treated as working every day
+   * rather than as never working — the field is optional in onboarding, and
+   * defaulting it to "closed" would tell customers a live business is
+   * unavailable. Both values are dropped (null / 0) once the horizon is
+   * reached, because "free somewhere in the next four months" is not a claim
+   * worth putting on a profile.
+   */
+  private availabilityView(doc: OrganizerProfileDocument): {
+    nextFreeDate: string | null;
+    slotsLeftThatWeek: number;
+  } {
+    const busy = new Set((doc.busyDates ?? []).map((d) => OrganizerService.isoDay(new Date(d))));
+    const workingKeys = doc.workingDays ?? [];
+    const worksOn = (date: Date): boolean =>
+      workingKeys.length === 0 || workingKeys.includes(OrganizerService.DAY_KEYS[date.getUTCDay()]);
+
+    const start = new Date(`${OrganizerService.isoDay(new Date())}T00:00:00.000Z`);
+    const dayAt = (offset: number): Date =>
+      new Date(start.getTime() + offset * 24 * 60 * 60 * 1000);
+
+    let free: Date | null = null;
+    for (let i = 0; i < OrganizerService.AVAILABILITY_HORIZON_DAYS; i += 1) {
+      const day = dayAt(i);
+      if (worksOn(day) && !busy.has(OrganizerService.isoDay(day))) {
+        free = day;
+        break;
+      }
+    }
+    if (!free) return { nextFreeDate: null, slotsLeftThatWeek: 0 };
+
+    // The Sunday-to-Saturday week that free date falls in, counted from today
+    // forward — a slot that has already passed is not one a customer can take.
+    const weekStart = new Date(free.getTime() - free.getUTCDay() * 24 * 60 * 60 * 1000);
+    let slots = 0;
+    for (let i = 0; i < 7; i += 1) {
+      const day = new Date(weekStart.getTime() + i * 24 * 60 * 60 * 1000);
+      if (day < start) continue;
+      if (worksOn(day) && !busy.has(OrganizerService.isoDay(day))) slots += 1;
+    }
+
+    return { nextFreeDate: OrganizerService.isoDay(free), slotsLeftThatWeek: slots };
   }
 }

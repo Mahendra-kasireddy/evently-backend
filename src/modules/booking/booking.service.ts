@@ -16,6 +16,7 @@ import {
   ONGOING_BOOKING_STATUSES,
   AWAITING_ORGANIZER_STATUSES,
   ORGANIZER_RESPONSE_WINDOW_HOURS,
+  AdvanceMethod,
   PaymentStatus,
   TaskAssignmentStatus,
 } from './schemas/booking.schema';
@@ -683,6 +684,7 @@ export class BookingService {
     userId: string,
     dto: CreateBookingDto,
     paymentOrderId?: string,
+    advanceMethod: AdvanceMethod = AdvanceMethod.ONLINE,
   ): Promise<Record<string, unknown>> {
     await this.assertPaidFor(userId, dto.quotationId, paymentOrderId);
     const seed = await this.quoteService.getBookingSeed(userId, dto.quotationId);
@@ -755,6 +757,7 @@ export class BookingService {
       title,
       placedAt,
       respondBy,
+      advanceMethod,
     }).catch(async (error: unknown) => {
       if (quote) await this.couponService.releaseForBooking(bookingId.toString());
       throw error;
@@ -805,9 +808,21 @@ export class BookingService {
     }
 
     const order = await this.paymentOrderModel.findById(paymentOrderId).exec();
+    /*
+     * CASH_DUE counts here, and only here.
+     *
+     * The gate exists so a client cannot conjure a booking by calling an
+     * endpoint — it asks "did this customer really go through checkout for
+     * this quotation". A cash order is that record: the customer chose to pay
+     * the organizer directly, and the server wrote the order itself. What it
+     * is NOT is money received, which is why the booking it produces stays
+     * UNPAID until the organizer confirms.
+     */
+    const settled =
+      order?.status === PaymentOrderStatus.PAID || order?.status === PaymentOrderStatus.CASH_DUE;
     if (
       !order ||
-      order.status !== PaymentOrderStatus.PAID ||
+      !settled ||
       order.customer.toString() !== userId ||
       order.quotation.toString() !== quotationId
     ) {
@@ -826,9 +841,21 @@ export class BookingService {
     title: string;
     placedAt: Date;
     respondBy: Date;
+    advanceMethod: AdvanceMethod;
   }): Promise<BookingDocument> {
-    const { bookingId, seed, quote, amount, advanceAmount, eventDate, title, placedAt, respondBy } =
-      input;
+    const {
+      bookingId,
+      seed,
+      quote,
+      amount,
+      advanceAmount,
+      eventDate,
+      title,
+      placedAt,
+      respondBy,
+      advanceMethod,
+    } = input;
+    const cash = advanceMethod === AdvanceMethod.CASH;
 
     return this.bookingModel.create({
       _id: bookingId,
@@ -848,16 +875,22 @@ export class BookingService {
       couponCode: quote ? quote.code : '',
       couponDiscount: quote ? quote.discountAmount : 0,
       /*
-       * Creating the booking IS the advance payment in this flow — the customer
-       * reaches `POST /booking` only from checkout's "Confirm & Pay". So the
-       * payment axis is settled here, and the booking axis moves to
-       * AWAITING_ORGANIZER: paid, but not yet accepted by anyone.
+       * Online, creating the booking IS the advance payment: the customer
+       * reaches here only once the gateway has settled, so the payment axis is
+       * closed here and the booking axis moves to AWAITING_ORGANIZER — paid,
+       * but not yet accepted by anyone.
+       *
+       * In cash, no money has moved. The booking is real and the organizer has
+       * been asked to answer, but the advance is still owed and recording it
+       * as paid would put a figure in the customer's payments screen, and in
+       * the organizer's earnings, that nobody has handed over.
        */
       advancePercentage: seed.advancePercentage,
       advanceAmount,
-      amountPaid: advanceAmount,
-      paymentStatus: PaymentStatus.ADVANCE_PAID,
-      advancePaidAt: placedAt,
+      advanceMethod,
+      amountPaid: cash ? 0 : advanceAmount,
+      paymentStatus: cash ? PaymentStatus.UNPAID : PaymentStatus.ADVANCE_PAID,
+      ...(cash ? {} : { advancePaidAt: placedAt }),
       organizerRespondBy: respondBy,
       progress: STATUS_META[BookingStatus.AWAITING_ORGANIZER].progress,
       status: BookingStatus.AWAITING_ORGANIZER,
@@ -871,9 +904,16 @@ export class BookingService {
         {
           status: BookingStatus.AWAITING_ORGANIZER,
           label: STATUS_META[BookingStatus.AWAITING_ORGANIZER].label,
-          note: quote
-            ? `Advance of ₹${advanceAmount.toLocaleString('en-IN')} received. Coupon ${quote.code} saved ₹${quote.discountAmount.toLocaleString('en-IN')}.`
-            : `Advance of ₹${advanceAmount.toLocaleString('en-IN')} received.`,
+          note: [
+            cash
+              ? `Advance of ₹${advanceAmount.toLocaleString('en-IN')} to be paid in cash to the organizer.`
+              : `Advance of ₹${advanceAmount.toLocaleString('en-IN')} received.`,
+            quote
+              ? `Coupon ${quote.code} saved ₹${quote.discountAmount.toLocaleString('en-IN')}.`
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' '),
           at: placedAt,
         },
       ],
@@ -1623,6 +1663,60 @@ export class BookingService {
   }
 
   /** Transition a booking's status, enforcing who may make which change. */
+  /**
+   * The organizer says the cash advance reached them.
+   *
+   * Only they can say it. The customer tapping "I paid" would move a figure in
+   * the organizer's own earnings on the customer's word alone, and the whole
+   * reason a cash booking starts UNPAID is that nobody but the person holding
+   * the money knows whether it arrived.
+   *
+   * Idempotent: a second call on an already-settled advance returns the
+   * booking rather than crediting it twice.
+   */
+  async confirmCashAdvance(actor: AuthUser, id: string): Promise<Record<string, unknown>> {
+    const booking = await this.loadBooking(id);
+
+    const manager = this.isAdmin(actor) || (await this.isOwningOrganizer(booking, actor));
+    if (!manager) {
+      throw new ForbiddenException('Only the organizer can confirm a cash advance');
+    }
+    if (booking.advanceMethod !== AdvanceMethod.CASH) {
+      throw new ForbiddenException('This booking’s advance was not to be paid in cash');
+    }
+    if (booking.paymentStatus !== PaymentStatus.UNPAID) {
+      return this.detailView(booking);
+    }
+
+    const receivedAt = new Date();
+    booking.paymentStatus = PaymentStatus.ADVANCE_PAID;
+    booking.advancePaidAt = receivedAt;
+    booking.amountPaid = booking.advanceAmount;
+    booking.timeline.push({
+      status: booking.status,
+      label: 'Cash advance received',
+      note: `The organizer confirmed ₹${booking.advanceAmount.toLocaleString('en-IN')} received in cash.`,
+      at: receivedAt,
+    });
+    await booking.save();
+
+    await this.paymentOrderModel
+      .updateOne(
+        { quotation: booking.quotation, status: PaymentOrderStatus.CASH_DUE },
+        { status: PaymentOrderStatus.PAID, paidAt: receivedAt },
+      )
+      .exec();
+
+    await this.notifyUser(
+      booking.customer.toString(),
+      'Cash advance confirmed',
+      `Your organizer confirmed the ₹${booking.advanceAmount.toLocaleString('en-IN')} advance. The balance is due before your event.`,
+      `/bookings/${booking._id.toString()}`,
+    );
+
+    return this.detailView(booking);
+  }
+
   async updateStatus(
     actor: AuthUser,
     id: string,

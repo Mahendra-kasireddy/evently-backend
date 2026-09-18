@@ -1,4 +1,10 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import {
@@ -44,6 +50,19 @@ const QUOTE_RESPONSE_WINDOW_DAYS = 7;
  * marketplace teaches its supply side to ignore it.
  */
 const BROADCAST_LIMIT = 6;
+
+/**
+ * The organizers a customer-addressed brief goes to, from either shape the
+ * client may have sent, de-duplicated and in the order they chose.
+ *
+ * Duplicates matter: `organizerId` and `organizerIds` can name the same
+ * organizer, and without this that organizer is notified twice and counted
+ * twice in "went to N organizers".
+ */
+function recipientIdsOf(dto: RequestQuoteFromOrganizerDto): string[] {
+  const all = [...(dto.organizerIds ?? []), ...(dto.organizerId ? [dto.organizerId] : [])];
+  return all.filter((id, i) => all.indexOf(id) === i);
+}
 
 /** Minimal organizer identity surfaced on the Home "Current Event" card. */
 export interface OrganizerRef {
@@ -408,14 +427,33 @@ export class QuoteService {
     );
   }
 
-  /** Request targeted at a single organizer ("Get quote" on a card). */
-  async createForOrganizer(
+  /**
+   * A brief the customer addressed themselves — one organizer from a profile,
+   * or the shortlist they ticked in the Plan wizard.
+   *
+   * Distinct from `createFromDraft`, which asks the recommender who should
+   * receive it. Here the customer has already decided, so no matching runs and
+   * nobody is added to the list they chose.
+   *
+   * `organizer` is set only when they picked exactly one. It means "this brief
+   * was aimed at you and nobody else", which is what lets an organizer tell a
+   * direct approach from a shortlist of six — and it would be a lie on a
+   * request that went to five other people. The inbox matches on `recipients`
+   * either way, so every recipient still sees it.
+   */
+  async createForOrganizers(
     userId: string,
     dto: RequestQuoteFromOrganizerDto,
   ): Promise<QuoteRequestDocument> {
+    const chosen = recipientIdsOf(dto);
+    if (chosen.length === 0) {
+      throw new BadRequestException('Choose at least one organizer to send this brief to.');
+    }
+
+    const recipients = chosen.map((id) => new Types.ObjectId(id));
     const quote = await this.quoteModel.create({
       customer: new Types.ObjectId(userId),
-      organizer: new Types.ObjectId(dto.organizerId),
+      organizer: recipients.length === 1 ? recipients[0] : null,
       plan: dto.planId ? new Types.ObjectId(dto.planId) : null,
       occasion: dto.occasion,
       when: dto.when ?? '',
@@ -424,17 +462,29 @@ export class QuoteService {
       budget: dto.budget ?? '',
       categories: dto.categories ?? [],
       ideas: dto.ideas ?? '',
-      // One recipient, recorded the same way a broadcast records six, so every
-      // request answers "who was this sent to" the same way.
-      recipients: [new Types.ObjectId(dto.organizerId)],
+      // Recorded the same way a broadcast records six, so every request
+      // answers "who was this sent to" the same way.
+      recipients,
       closesAt: closingDate(),
     });
-    await this.notifyOrganizerProfile(
-      dto.organizerId,
-      'New quote request',
-      `A customer requested a quote for their ${dto.occasion || 'event'}. Review and reply from your dashboard.`,
-      NotificationType.QUOTE,
-      '/organizer/quotes',
+
+    /*
+     * Each recipient is told they are one of several. An organizer pricing a
+     * job they are alone on behaves differently from one pricing against four
+     * rivals, and hiding that is how a marketplace gets quotes nobody sharpens.
+     */
+    await Promise.all(
+      chosen.map((id) =>
+        this.notifyOrganizerProfile(
+          id,
+          'New quote request',
+          chosen.length === 1
+            ? `A customer requested a quote for their ${dto.occasion || 'event'}. Review and reply from your dashboard.`
+            : `A customer asked ${chosen.length} organizers to quote their ${dto.occasion || 'event'}. Review and reply from your dashboard before it closes.`,
+          NotificationType.QUOTE,
+          '/organizer/quotes',
+        ),
+      ),
     );
     return quote;
   }

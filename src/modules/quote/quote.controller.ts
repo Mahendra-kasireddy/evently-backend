@@ -21,13 +21,17 @@ export class QuoteController {
     return this.quoteService.createFromDraft(userId, dto);
   }
 
-  /** Organizer card "Get quote" — request targeted at one organizer. */
+  /**
+   * A brief the customer addressed themselves: "Get quote" on one organizer's
+   * profile, or the shortlist they ticked in the Plan wizard. No matching
+   * runs — they have already chosen.
+   */
   @Post('requestQuoteFromOrganizer')
   requestQuoteFromOrganizer(
     @CurrentUser('userId') userId: string,
     @Body() dto: RequestQuoteFromOrganizerDto,
   ) {
-    return this.quoteService.createForOrganizer(userId, dto);
+    return this.quoteService.createForOrganizers(userId, dto);
   }
 
   // ----- Customer: viewing / acting -----

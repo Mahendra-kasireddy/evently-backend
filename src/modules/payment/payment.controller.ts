@@ -35,6 +35,18 @@ export class PaymentController {
   }
 
   /**
+   * Books the event with the advance owed in cash to the organizer.
+   *
+   * Nothing is charged and nothing is held — the booking is written and the
+   * organizer is asked both to accept it and to confirm the cash when it
+   * reaches them.
+   */
+  @Post('cash')
+  bookWithCash(@CurrentUser('userId') userId: string, @Body() dto: CreatePaymentOrderDto) {
+    return this.paymentService.bookWithCash(userId, dto);
+  }
+
+  /**
    * Razorpay's account of the payment.
    *
    * Public because Razorpay has no session, and verified by signature over the

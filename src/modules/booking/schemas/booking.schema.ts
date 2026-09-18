@@ -28,6 +28,14 @@ export enum PaymentStatus {
   PAID_IN_FULL = 'paid_in_full',
 }
 
+/** How the advance on a booking is being settled. */
+export enum AdvanceMethod {
+  /** Taken online, through the gateway, before the organizer was told. */
+  ONLINE = 'online',
+  /** Handed to the organizer directly; they confirm when it arrives. */
+  CASH = 'cash',
+}
+
 /** Booking states that still need the organizer to answer. */
 export const AWAITING_ORGANIZER_STATUSES = [
   BookingStatus.PENDING,
@@ -219,6 +227,16 @@ export class Booking {
 
   @Prop({ type: Date })
   advancePaidAt?: Date;
+
+  /**
+   * How this booking's advance is being settled.
+   *
+   * On a cash booking `paymentStatus` stays UNPAID until the organizer says
+   * the money reached them — so this is what tells "nobody has paid yet" apart
+   * from "paid, in cash, and the organizer has confirmed it".
+   */
+  @Prop({ type: String, enum: AdvanceMethod, default: AdvanceMethod.ONLINE, index: true })
+  advanceMethod: AdvanceMethod;
 
   // Deadline for the organizer to accept/decline; past it the booking expires.
   @Prop({ type: Date })

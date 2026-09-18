@@ -185,6 +185,15 @@ export class BookingController {
   }
 
   /** Transition a booking's status. */
+  /**
+   * The organizer confirms a cash advance has reached them. Theirs alone to
+   * say: it credits their own earnings and closes the customer's advance.
+   */
+  @Patch(':id/cash-advance')
+  confirmCashAdvance(@CurrentUser() actor: AuthUser, @Param('id') id: string) {
+    return this.bookingService.confirmCashAdvance(actor, id);
+  }
+
   @Patch(':id/status')
   updateStatus(
     @CurrentUser() user: AuthUser,

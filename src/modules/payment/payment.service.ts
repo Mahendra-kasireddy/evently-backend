@@ -14,11 +14,13 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import Razorpay from 'razorpay';
 import { Model, Types } from 'mongoose';
 import { BookingService } from '../booking/booking.service';
+import { AdvanceMethod } from '../booking/schemas/booking.schema';
 import { CouponService } from '../coupon/coupon.service';
 import { QuoteService } from '../quote/quote.service';
 import {
   PaymentOrder,
   PaymentOrderDocument,
+  PaymentMethod,
   PaymentOrderStatus,
 } from './schemas/payment-order.schema';
 import { CreatePaymentOrderDto } from './dto/create-payment-order.dto';
@@ -40,6 +42,15 @@ export interface PaymentOrderView {
   couponCode: string;
   couponDiscount: number;
   organizerName: string;
+  /**
+   * Whether a gateway is wired up at all.
+   *
+   * False means `orderId` and `keyId` are empty and online payment cannot be
+   * offered — but the figures above are still real, because they come from the
+   * quotation rather than from Razorpay. The client uses this to disable the
+   * online methods and leave cash, which needs no gateway.
+   */
+  gatewayAvailable: boolean;
 }
 
 const CURRENCY = 'INR' as const;
@@ -79,7 +90,16 @@ export class PaymentService {
    * sends a quotation id and at most a coupon code — never a number.
    */
   async createOrder(userId: string, dto: CreatePaymentOrderDto): Promise<PaymentOrderView> {
-    this.assertConfigured();
+    /*
+     * Deliberately not gated on `assertConfigured()`.
+     *
+     * It used to be, and that made this whole screen fail with "payments are
+     * not available" whenever no keys were configured — including for a
+     * customer who wanted to pay their organizer in cash, which needs no
+     * gateway at all. What is owed is a fact about the quotation, so it can
+     * always be stated; only the Razorpay order below depends on keys.
+     */
+    const gatewayAvailable = this.isConfigured();
 
     const seed = await this.quoteService.getBookingSeed(userId, dto.quotationId);
 
@@ -96,31 +116,41 @@ export class PaymentService {
       throw new BadRequestException('This quotation has nothing left to pay.');
     }
 
-    const order = await this.razorpay().orders.create({
-      amount: advanceAmount * 100,
-      currency: CURRENCY,
-      /* Razorpay caps receipts at 40 characters; a bare ObjectId is 24. */
-      receipt: dto.quotationId,
-      notes: { quotationId: dto.quotationId, customerId: seed.customerId },
-    });
+    /*
+     * No keys, no order — and no order row either. A CREATED row that can
+     * never be paid is a payment attempt in the database that never happened,
+     * and support would have to tell those two apart later. The cash path
+     * writes its own row when the customer takes it.
+     */
+    const order = gatewayAvailable
+      ? await this.razorpay().orders.create({
+          amount: advanceAmount * 100,
+          currency: CURRENCY,
+          /* Razorpay caps receipts at 40 characters; a bare ObjectId is 24. */
+          receipt: dto.quotationId,
+          notes: { quotationId: dto.quotationId, customerId: seed.customerId },
+        })
+      : null;
 
-    await this.orderModel.create({
-      customer: new Types.ObjectId(seed.customerId),
-      quotation: new Types.ObjectId(dto.quotationId),
-      razorpayOrderId: order.id,
-      amount: advanceAmount,
-      totalAmount,
-      advancePercentage: seed.advancePercentage,
-      couponCode: quote ? quote.code : '',
-      couponDiscount: quote ? quote.discountAmount : 0,
-      status: PaymentOrderStatus.CREATED,
-    });
+    if (order) {
+      await this.orderModel.create({
+        customer: new Types.ObjectId(seed.customerId),
+        quotation: new Types.ObjectId(dto.quotationId),
+        razorpayOrderId: order.id,
+        amount: advanceAmount,
+        totalAmount,
+        advancePercentage: seed.advancePercentage,
+        couponCode: quote ? quote.code : '',
+        couponDiscount: quote ? quote.discountAmount : 0,
+        status: PaymentOrderStatus.CREATED,
+      });
+    }
 
     return {
-      orderId: order.id,
+      orderId: order?.id ?? '',
       amountInPaise: advanceAmount * 100,
       currency: CURRENCY,
-      keyId: this.keyId(),
+      keyId: gatewayAvailable ? this.keyId() : '',
       advanceAmount,
       totalAmount,
       balanceAmount: Math.max(0, totalAmount - advanceAmount),
@@ -128,7 +158,88 @@ export class PaymentService {
       couponCode: quote ? quote.code : '',
       couponDiscount: quote ? quote.discountAmount : 0,
       organizerName: await this.organizerNameFor(seed.organizerId),
+      gatewayAvailable,
     };
+  }
+
+  /**
+   * The customer will hand the advance to the organizer themselves.
+   *
+   * No gateway, so nothing here is "held by Evently" and there is nothing to
+   * refund — an order is written to record the choice, and it sits at
+   * CASH_DUE until the organizer says the money arrived. The booking is real
+   * from this moment (the organizer has to answer inside the same window as
+   * any other), but its payment axis stays UNPAID, because it is.
+   *
+   * Deliberately not gated on `isConfigured()`: cash is the path that works
+   * when the gateway does not.
+   */
+  async bookWithCash(userId: string, dto: CreatePaymentOrderDto): Promise<Record<string, unknown>> {
+    const seed = await this.quoteService.getBookingSeed(userId, dto.quotationId);
+
+    const quote = dto.couponCode
+      ? await this.couponService.evaluate(
+          { customerId: seed.customerId, organizerId: seed.organizerId, amount: seed.amount },
+          dto.couponCode,
+        )
+      : null;
+
+    const totalAmount = quote ? quote.finalAmount : seed.amount;
+    const advanceAmount = Math.round((totalAmount * seed.advancePercentage) / 100);
+    if (advanceAmount < 1) {
+      throw new BadRequestException('This quotation has nothing left to pay.');
+    }
+
+    /*
+     * One cash order per quotation, reused on a retry. Without this, a customer
+     * who tapped twice on a slow connection would leave two orders against one
+     * quotation and the organizer would be asked to confirm the same cash
+     * advance twice.
+     */
+    const quotationId = new Types.ObjectId(dto.quotationId);
+    const existing = await this.orderModel
+      .findOne({ quotation: quotationId, method: PaymentMethod.CASH })
+      .exec();
+
+    const order =
+      existing ??
+      (await this.orderModel.create({
+        customer: new Types.ObjectId(seed.customerId),
+        quotation: quotationId,
+        razorpayOrderId: '',
+        method: PaymentMethod.CASH,
+        amount: advanceAmount,
+        totalAmount,
+        advancePercentage: seed.advancePercentage,
+        couponCode: quote ? quote.code : '',
+        couponDiscount: quote ? quote.discountAmount : 0,
+        status: PaymentOrderStatus.CASH_DUE,
+      }));
+
+    const booking = await this.bookingService.createFromQuotation(
+      seed.customerId,
+      {
+        quotationId: dto.quotationId,
+        ...(order.couponCode ? { couponCode: order.couponCode } : {}),
+      },
+      order._id.toString(),
+      AdvanceMethod.CASH,
+    );
+
+    const bookingId = (booking as { id?: string }).id;
+    if (bookingId && !order.booking && Types.ObjectId.isValid(bookingId)) {
+      try {
+        await this.orderModel
+          .findByIdAndUpdate(order._id, { booking: new Types.ObjectId(bookingId) })
+          .exec();
+      } catch (error) {
+        this.logger.warn(
+          `Could not link cash order ${order._id.toString()} to booking ${bookingId}: ${String(error)}`,
+        );
+      }
+    }
+
+    return booking;
   }
 
   /**
