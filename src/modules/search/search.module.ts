@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { SearchService } from './search.service';
+import { RecentSearchService } from './recent-search.service';
 import { SearchController } from './search.controller';
+import { RecentSearch, RecentSearchSchema } from './schemas/recent-search.schema';
 import { PackageModule } from '../package/package.module';
 import { OrganizerModule } from '../organizer/organizer.module';
 import { Package, PackageSchema } from '../package/schemas/package.schema';
@@ -22,9 +24,11 @@ import {
     MongooseModule.forFeature([
       { name: Package.name, schema: PackageSchema },
       { name: OrganizerProfile.name, schema: OrganizerProfileSchema },
+      { name: RecentSearch.name, schema: RecentSearchSchema },
     ]),
   ],
   controllers: [SearchController],
-  providers: [SearchService],
+  providers: [SearchService, RecentSearchService],
+  exports: [RecentSearchService],
 })
 export class SearchModule {}
