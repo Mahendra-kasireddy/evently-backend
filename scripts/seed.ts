@@ -354,7 +354,6 @@ const customerHomeContent = {
   },
   planSection: {
     title: 'Plan any celebration',
-    subtitle: 'Pick an occasion — get an instant estimate and matched organizers in seconds.',
     occasions: [
       { id: 'wedding', icon: 'heart', art: 'wedding', label: 'Wedding', cta: 'Start planning' },
       { id: 'birthday', icon: 'gift', art: 'birthday', label: 'Birthday', cta: 'Start planning' },

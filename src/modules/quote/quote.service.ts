@@ -22,6 +22,7 @@ import { RequestQuotesDto } from './dto/request-quotes.dto';
 import { RequestQuoteFromOrganizerDto } from './dto/request-quote-from-organizer.dto';
 import { QuotationLineDto, RespondQuotationDto } from './dto/respond-quotation.dto';
 import { UpdateQuotationDto } from './dto/update-quotation.dto';
+import { UpdateRequestDto } from './dto/update-request.dto';
 import { OrganizerService } from '../organizer/organizer.service';
 import { PlanService } from '../plan/plan.service';
 import {
@@ -30,6 +31,17 @@ import {
 } from '../organizer/schemas/organizer-profile.schema';
 import { NotificationService } from '../notification/notification.service';
 import { NotificationType } from '../notification/schemas/notification.schema';
+
+/**
+ * Statuses that are not a live quote: the organizer's private draft, one they
+ * pulled back, and one the customer's own edit left pricing a brief that no
+ * longer exists. Anything counting or comparing quotes excludes all three.
+ */
+const DEAD_QUOTATION_STATUSES = [
+  QuotationStatus.DRAFT,
+  QuotationStatus.WITHDRAWN,
+  QuotationStatus.SUPERSEDED,
+];
 
 const ORG_FIELDS = 'name initials avatarColor tier rating reviews user';
 
@@ -310,6 +322,12 @@ export class QuoteService {
         });
       } else if (q.status === QuotationStatus.ACCEPTED) {
         events.push({ key: 'accepted', label: `You accepted ${orgName}'s quote`, at: q.updatedAt });
+      } else if (q.status === QuotationStatus.SUPERSEDED) {
+        events.push({
+          key: 'superseded',
+          label: `${orgName}'s quote lapsed when you edited the brief`,
+          at: q.updatedAt,
+        });
       } else if (q.status === QuotationStatus.REJECTED) {
         events.push({ key: 'rejected', label: `${orgName}'s quote was declined`, at: q.updatedAt });
       } else {
@@ -534,7 +552,7 @@ export class QuoteService {
     const quotations = await this.quotationModel
       .find({
         request: { $in: requests.map((r) => r._id) },
-        status: { $nin: [QuotationStatus.DRAFT, QuotationStatus.WITHDRAWN] },
+        status: { $nin: DEAD_QUOTATION_STATUSES },
       })
       .populate('organizer', ORG_FIELDS)
       // Newest first, matching the order the request timeline reports them in.
@@ -618,7 +636,7 @@ export class QuoteService {
     const quotations = await this.quotationModel
       .find({
         request: request._id,
-        status: { $nin: [QuotationStatus.WITHDRAWN, QuotationStatus.DRAFT] },
+        status: { $nin: DEAD_QUOTATION_STATUSES },
       })
       .populate('organizer', ORG_FIELDS)
       .exec();
@@ -916,6 +934,88 @@ export class QuoteService {
 
     const populated = await q.populate('organizer', ORG_FIELDS);
     return this.quotationView(populated);
+  }
+
+  /**
+   * The customer revises a brief that nobody has been hired off yet.
+   *
+   * Every quote already received is marked superseded, because each of them
+   * priced a brief that no longer exists — a customer who moves the date by
+   * three months and keeps the old numbers on screen is comparing quotes for
+   * an event nobody agreed to. The organizers who had priced it are told, and
+   * the request goes back to OPEN so their new quote is the one that counts.
+   *
+   * Editing stops at acceptance: past that there is a booking, and the terms
+   * are no longer the customer's alone to change.
+   */
+  async updateRequest(
+    userId: string,
+    requestId: string,
+    dto: UpdateRequestDto,
+  ): Promise<Record<string, unknown>> {
+    const request = await this.ownedRequest(userId, requestId);
+    if (request.status === QuoteRequestStatus.ACCEPTED) {
+      throw new ForbiddenException(
+        'This request has an accepted quote — talk to your organizer to change the plan',
+      );
+    }
+    if (request.status === QuoteRequestStatus.CANCELLED) {
+      throw new ForbiddenException('A cancelled request cannot be edited');
+    }
+
+    // Only what was sent: an absent field is one the customer did not touch,
+    // which is not the same as one they cleared.
+    if (dto.occasion !== undefined) request.occasion = dto.occasion.trim();
+    if (dto.when !== undefined) request.when = dto.when.trim();
+    if (dto.where !== undefined) request.where = dto.where.trim();
+    if (dto.guests !== undefined) request.guests = dto.guests.trim();
+    if (dto.budget !== undefined) request.budget = dto.budget.trim();
+    if (dto.categories !== undefined) request.categories = dto.categories;
+    if (dto.ideas !== undefined) request.ideas = dto.ideas.trim();
+
+    const live = await this.quotationModel
+      .find({
+        request: request._id,
+        status: { $in: [QuotationStatus.SENT, QuotationStatus.UPDATED] },
+      })
+      .exec();
+
+    if (live.length > 0) {
+      await this.quotationModel
+        .updateMany(
+          {
+            request: request._id,
+            status: { $in: [QuotationStatus.SENT, QuotationStatus.UPDATED] },
+          },
+          { status: QuotationStatus.SUPERSEDED },
+        )
+        .exec();
+      // Nothing priced this brief any more, so it is open again — the same
+      // state it was in before the first organizer replied.
+      request.status = QuoteRequestStatus.OPEN;
+    }
+
+    await request.save();
+
+    // Everyone who had priced it, plus a targeted organizer who may not have
+    // replied yet — they are all holding a brief that has changed.
+    const organizerIds = new Set(live.map((q) => q.organizer.toString()));
+    if (request.organizer) organizerIds.add(request.organizer.toString());
+    for (const orgId of organizerIds) {
+      await this.notifyOrganizerProfile(
+        orgId,
+        'Quote request updated',
+        `A customer changed their ${request.occasion || 'event'} brief. Your earlier quote no longer applies — please send a new one.`,
+        NotificationType.QUOTE,
+        '/organizer/quotes',
+      );
+    }
+
+    return {
+      id: request._id.toString(),
+      status: request.status,
+      supersededQuotes: live.length,
+    };
   }
 
   /** Customer cancels a whole request; live quotations are rejected. */

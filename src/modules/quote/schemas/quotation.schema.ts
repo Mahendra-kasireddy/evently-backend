@@ -12,6 +12,14 @@ export enum QuotationStatus {
   ACCEPTED = 'accepted', // customer accepted it
   REJECTED = 'rejected', // customer rejected it (or a sibling was accepted)
   WITHDRAWN = 'withdrawn', // organizer pulled it back
+  /*
+   * The customer edited the brief under it.
+   *
+   * Not `withdrawn` (that says the organizer pulled it) and not `rejected`
+   * (that says the customer turned it down): this quote priced a brief that no
+   * longer exists, and the organizer is asked to price the new one.
+   */
+  SUPERSEDED = 'superseded',
 }
 
 /** A single priced line on a quotation, e.g. "Food / Catering — ₹1,05,000". */

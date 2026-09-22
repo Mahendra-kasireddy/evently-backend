@@ -4,6 +4,7 @@ import { RequestQuotesDto } from './dto/request-quotes.dto';
 import { RequestQuoteFromOrganizerDto } from './dto/request-quote-from-organizer.dto';
 import { RespondQuotationDto } from './dto/respond-quotation.dto';
 import { UpdateQuotationDto } from './dto/update-quotation.dto';
+import { UpdateRequestDto } from './dto/update-request.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -67,6 +68,19 @@ export class QuoteController {
   }
 
   /** Cancel the whole quote request. */
+  /**
+   * Revise a brief that has not been accepted yet. Quotes already received are
+   * superseded and those organizers are asked to price the new brief.
+   */
+  @Patch('updateRequest/:id')
+  updateRequest(
+    @CurrentUser('userId') userId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateRequestDto,
+  ) {
+    return this.quoteService.updateRequest(userId, id, dto);
+  }
+
   @Patch('cancelRequest/:id')
   cancelRequest(@CurrentUser('userId') userId: string, @Param('id') id: string) {
     return this.quoteService.cancelRequest(userId, id);

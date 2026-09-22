@@ -40,7 +40,7 @@ export class HomeService {
       content,
       packages,
       nearby,
-      booking,
+      bookings,
       liveEvents,
       unreadCount,
       offers,
@@ -52,10 +52,10 @@ export class HomeService {
       // busy they have been this month, rather than the raw documents.
       this.packageService.findActiveForCustomer(),
       this.organizerService.findTopNear(user.location),
-      // Ongoing booking (confirmed / in progress) behind Home's rich "BOOKED"
-      // card. Null at every other stage, where the `currentEvent` hero carries
-      // the event instead.
-      this.bookingService.getActiveForUser(userId),
+      // Ongoing bookings (confirmed / in progress) behind Home's rich "BOOKED"
+      // card — every one of them, newest first. Empty at every other stage,
+      // where the `currentEvent` hero carries the event instead.
+      this.bookingService.getActiveListForUser(userId),
       // Every live event, furthest along first — see `otherEvents` below.
       this.currentEventService.resolveAll(userId),
       this.notificationService.unreadCount(userId),
@@ -81,7 +81,18 @@ export class HomeService {
        * calling distant organizers "near you".
        */
       topOrganizersScope: nearby.scope,
-      booking,
+      /**
+       * Every live booking, so a customer with two events gets two cards
+       * rather than one card and a row. Home draws one full-width when there
+       * is one and a swipeable row when there are more.
+       */
+      bookings,
+      /**
+       * The newest of them, unchanged, for clients that predate `bookings`.
+       * Dropping it would blank the booked card on every installed app until
+       * everyone updated.
+       */
+      booking: bookings[0] ?? null,
       currentEvent: liveEvents[0] ?? null,
       /**
        * The customer's other live events, same furthest-along-first order,

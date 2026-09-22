@@ -460,17 +460,41 @@ export class BookingService {
     ];
   }
 
-  async getActiveForUser(userId: string): Promise<ActiveBookingView | null> {
-    const booking = await this.bookingModel
-      .findOne({
+  /**
+   * Every live booking behind Home's rich "BOOKED" card, newest first.
+   *
+   * This was a `findOne`, and a customer with a wedding in March and a
+   * housewarming in June saw only one of them as a card — the other was
+   * demoted to a one-line row among their "other events", which is the
+   * treatment a brief still collecting quotes gets. A paid booking is not that.
+   * Home decides how many to draw; the service says what exists.
+   */
+  async getActiveListForUser(userId: string): Promise<ActiveBookingView[]> {
+    const bookings = await this.bookingModel
+      .find({
         customer: new Types.ObjectId(userId),
         status: { $in: BookingService.LIVE_BOOKING_STATUSES },
       })
       .populate('organizer', 'name initials avatarColor')
       .sort({ createdAt: -1 })
       .exec();
-    if (!booking) return null;
 
+    // In parallel: each view reads its own brief and invitation, and doing
+    // those in sequence would make Home's latency scale with booking count.
+    return Promise.all(bookings.map((booking) => this.toActiveView(booking)));
+  }
+
+  /**
+   * The newest live booking, or null. Kept for the callers that want exactly
+   * one — it is the first of {@link getActiveListForUser}, same ordering.
+   */
+  async getActiveForUser(userId: string): Promise<ActiveBookingView | null> {
+    const [newest] = await this.getActiveListForUser(userId);
+    return newest ?? null;
+  }
+
+  /** One live booking, as Home's booked card wants to read it. */
+  private async toActiveView(booking: BookingDocument): Promise<ActiveBookingView> {
     const org = booking.organizer as unknown as {
       _id?: Types.ObjectId;
       name?: string;

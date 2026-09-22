@@ -73,7 +73,14 @@ export class AdminEventService {
         {
           $match: {
             request: { $in: ids },
-            status: { $nin: [QuotationStatus.DRAFT, QuotationStatus.WITHDRAWN] },
+            status: {
+              $nin: [
+                QuotationStatus.DRAFT,
+                QuotationStatus.WITHDRAWN,
+                // Priced a brief the customer has since edited.
+                QuotationStatus.SUPERSEDED,
+              ],
+            },
           },
         },
         { $group: { _id: '$request', n: { $sum: 1 } } },
@@ -125,7 +132,14 @@ export class AdminEventService {
       this.quotationModel
         .find({
           request: request._id,
-          status: { $nin: [QuotationStatus.DRAFT, QuotationStatus.WITHDRAWN] },
+          status: {
+            $nin: [
+              QuotationStatus.DRAFT,
+              QuotationStatus.WITHDRAWN,
+              // Priced a brief the customer has since edited.
+              QuotationStatus.SUPERSEDED,
+            ],
+          },
         })
         .populate('organizer', 'name tier rating')
         .sort({ updatedAt: -1 })
