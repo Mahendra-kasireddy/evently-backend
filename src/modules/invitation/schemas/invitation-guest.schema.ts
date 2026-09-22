@@ -5,6 +5,21 @@ import { idJsonTransform } from '../../../common/utils/id-transform';
 export type InvitationGuestDocument = HydratedDocument<InvitationGuest>;
 
 /**
+ * Which side of the host's life a guest is from.
+ *
+ * A fixed three rather than free text: the list exists to be filtered, and
+ * free text turns "Friends", "friends" and "College friends" into three
+ * groups on the chip row. OTHER is the honest default for a guest imported
+ * from a phonebook, where nothing says which they are.
+ */
+export enum GuestGroup {
+  FAMILY = 'family',
+  FRIENDS = 'friends',
+  WORK = 'work',
+  OTHER = 'other',
+}
+
+/**
  * What became of one share.
  *
  * `HANDED_OFF` is deliberately not `SENT`. In handoff mode the customer's own
@@ -76,6 +91,9 @@ export class InvitationGuest {
   /** E.164, e.g. `+919505043404` — see `guest/guest-phone.ts`. */
   @Prop({ required: true, trim: true })
   phone: string;
+
+  @Prop({ type: String, enum: GuestGroup, default: GuestGroup.OTHER, index: true })
+  group: GuestGroup;
 
   /**
    * The guest's identity, and their capability to view the invitation.

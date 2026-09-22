@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Query,
   Res,
@@ -13,7 +14,7 @@ import {
 import type { Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { InvitationGuestService } from './invitation-guest.service';
-import { AddGuestDto } from '../dto/add-guest.dto';
+import { AddGuestDto, AddGuestsDto, UpdateGuestDto } from '../dto/add-guest.dto';
 import { ShareInvitationDto } from '../dto/share-invitation.dto';
 import { guestAppUrl } from './share-links';
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
@@ -64,6 +65,32 @@ export class InvitationGuestController {
     @Body() dto: AddGuestDto,
   ) {
     return this.guests.addGuest(userId, bookingId, dto);
+  }
+
+  /** Several at once — what importing from a phonebook sends. */
+  @UseGuards(RolesGuard)
+  @Roles(Role.CUSTOMER, Role.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @Post('mine/:bookingId/guests/bulk')
+  addMany(
+    @CurrentUser('userId') userId: string,
+    @Param('bookingId') bookingId: string,
+    @Body() dto: AddGuestsDto,
+  ) {
+    return this.guests.addGuests(userId, bookingId, dto);
+  }
+
+  /** Correct a guest's name, number or group. Their share link is unchanged. */
+  @UseGuards(RolesGuard)
+  @Roles(Role.CUSTOMER, Role.ADMIN)
+  @Patch('mine/:bookingId/guests/:guestId')
+  update(
+    @CurrentUser('userId') userId: string,
+    @Param('bookingId') bookingId: string,
+    @Param('guestId') guestId: string,
+    @Body() dto: UpdateGuestDto,
+  ) {
+    return this.guests.updateGuest(userId, bookingId, guestId, dto);
   }
 
   /** Share one section, or the whole invitation, with one or more guests. */

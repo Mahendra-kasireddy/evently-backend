@@ -10,6 +10,7 @@ import { Model, Types } from 'mongoose';
 import { randomBytes } from 'crypto';
 import { Invitation, InvitationDocument, InvitationStatus } from '../schemas/invitation.schema';
 import {
+  GuestGroup,
   InvitationGuest,
   InvitationGuestDocument,
   ShareStatus,
@@ -20,7 +21,7 @@ import {
   DEFAULT_SUB_EVENT_MINUTES,
   INVITATION_TEMPLATES,
 } from '../invitation-defaults';
-import { AddGuestDto } from '../dto/add-guest.dto';
+import { AddGuestDto, AddGuestsDto, UpdateGuestDto } from '../dto/add-guest.dto';
 import { ShareInvitationDto } from '../dto/share-invitation.dto';
 import { PHONE_REJECTION_MESSAGE, displayPhone, parseGuestPhone } from './guest-phone';
 import { guestAppUrl, guestShareUrl, shareMessage } from './share-links';
@@ -32,6 +33,7 @@ export interface GuestSummary {
   name: string;
   phone: string;
   phoneDisplay: string;
+  group: GuestGroup;
   /** Section keys already shared with this guest, so the UI can say so. */
   sharedSections: string[];
   lastSharedAt: Date | null;
@@ -104,7 +106,119 @@ export class InvitationGuestService {
    */
   async addGuest(userId: string, bookingId: string, dto: AddGuestDto): Promise<GuestSummary> {
     const { invitation, booking } = await this.publishedFor(userId, bookingId);
-    const guest = await this.findOrCreateGuest(invitation, booking, dto.name, dto.phone, true);
+    const guest = await this.findOrCreateGuest(
+      invitation,
+      booking,
+      dto.name,
+      dto.phone,
+      true,
+      dto.group,
+    );
+    return this.summarise(guest);
+  }
+
+  /**
+   * Several guests in one request — what importing from a phonebook sends.
+   *
+   * Every entry is attempted, and one bad number does not lose the other
+   * nineteen: a phonebook is full of landlines, short codes and half-typed
+   * numbers, and refusing the whole import over one of them would make the
+   * feature useless on real address books. Each result says which it was, so
+   * the screen can name the ones it could not take.
+   *
+   * A number already on the list resolves to the guest who holds it rather
+   * than erroring — importing the same contact twice is the normal way this
+   * gets used, and the customer's intent is "have these people on my list".
+   */
+  async addGuests(
+    userId: string,
+    bookingId: string,
+    dto: AddGuestsDto,
+  ): Promise<{ added: GuestSummary[]; skipped: Array<{ name: string; reason: string }> }> {
+    const { invitation, booking } = await this.publishedFor(userId, bookingId);
+
+    const added: GuestSummary[] = [];
+    const skipped: Array<{ name: string; reason: string }> = [];
+
+    for (const entry of dto.guests) {
+      try {
+        const guest = await this.findOrCreateGuest(
+          invitation,
+          booking,
+          entry.name,
+          entry.phone,
+          false,
+          entry.group,
+        );
+        added.push(this.summarise(guest));
+      } catch (err) {
+        skipped.push({
+          name: (entry.name ?? '').trim() || 'This contact',
+          reason:
+            err instanceof BadRequestException
+              ? ((err.getResponse() as { message?: string })?.message ?? 'Could not be added')
+              : 'Could not be added',
+        });
+      }
+    }
+
+    return { added, skipped };
+  }
+
+  /**
+   * Edits a guest already on the list.
+   *
+   * Changing the number is a real change of identity for a guest — the number
+   * is the duplicate key and what the invitation is sent to — so it is checked
+   * against the rest of the list the same way adding one is. The share token is
+   * deliberately untouched: a link already in somebody's WhatsApp must keep
+   * working when their name is corrected.
+   */
+  async updateGuest(
+    userId: string,
+    bookingId: string,
+    guestId: string,
+    dto: UpdateGuestDto,
+  ): Promise<GuestSummary> {
+    const { invitation } = await this.publishedFor(userId, bookingId);
+    if (!Types.ObjectId.isValid(guestId)) throw new NotFoundException('Unknown guest');
+
+    const guest = await this.guestModel
+      .findOne({ _id: guestId, invitation: invitation._id })
+      .exec();
+    if (!guest) throw new NotFoundException('Unknown guest');
+
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      if (!name) throw new BadRequestException('Enter the guest’s name.');
+      guest.name = name;
+    }
+
+    if (dto.phone !== undefined) {
+      const parsed = parseGuestPhone(
+        dto.phone,
+        this.config.get<string>('otp.defaultDialCode') ?? '+91',
+      );
+      if (!parsed.ok) {
+        throw new BadRequestException(PHONE_REJECTION_MESSAGE[parsed.reason ?? 'not_a_number']);
+      }
+      if (parsed.e164 !== guest.phone) {
+        const clash = await this.guestModel
+          .findOne({ invitation: invitation._id, phone: parsed.e164 })
+          .exec();
+        if (clash) {
+          throw new ConflictException({
+            message: `${clash.name} already has this number on the guest list.`,
+            guest: this.summarise(clash),
+          });
+        }
+        guest.phone = parsed.e164;
+      }
+    }
+
+    if (dto.group !== undefined) guest.group = dto.group;
+
+    await guest.save();
     return this.summarise(guest);
   }
 
@@ -223,6 +337,7 @@ export class InvitationGuestService {
     rawName: string,
     rawPhone: string,
     strict: boolean,
+    group?: GuestGroup,
   ): Promise<InvitationGuestDocument> {
     const name = (rawName ?? '').trim();
     if (!name) throw new BadRequestException('Enter the guest’s name.');
@@ -254,6 +369,7 @@ export class InvitationGuestService {
         booking: booking._id,
         name,
         phone: parsed.e164,
+        group: group ?? GuestGroup.OTHER,
         // 24 random bytes: this token *is* the guest's access to the
         // invitation, so it has to be unguessable, not merely unique.
         token: randomBytes(24).toString('base64url'),
@@ -287,6 +403,7 @@ export class InvitationGuestService {
       name: guest.name,
       phone: guest.phone,
       phoneDisplay: displayPhone(guest.phone),
+      group: guest.group ?? GuestGroup.OTHER,
       // '' means the complete invitation; kept as a distinct entry so the UI
       // can say "whole invitation sent" as well as which sections went.
       sharedSections: [...new Set(shares.map((s) => s.section))],
