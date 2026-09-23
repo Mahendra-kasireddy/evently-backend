@@ -45,6 +45,22 @@ export class InvitationBlock {
 
   @Prop({ trim: true, default: '' })
   body: string;
+
+  /**
+   * The customer has signed this section off.
+   *
+   * Per block, because that is how the customer reads it: they go down the
+   * invitation accepting one section at a time, and an invitation that can
+   * only be approved whole forces them to accept the parts they have not read
+   * to get to the one they have. The guest link goes live when the last
+   * visible block is approved — the whole-invitation approve does all of them
+   * at once, which is the same decision said in one tap.
+   *
+   * False on every block of an invitation approved before this field existed;
+   * the view reports them as approved because their invitation is.
+   */
+  @Prop({ default: false })
+  approved: boolean;
 }
 export const InvitationBlockSchema = SchemaFactory.createForClass(InvitationBlock);
 

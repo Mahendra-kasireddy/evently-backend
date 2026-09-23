@@ -124,6 +124,14 @@ export class InvitationService {
       invitation.markModified('details');
     }
     if (dto.blocks) {
+      /*
+       * Approval is the customer's and is not in this DTO, so it is carried
+       * over per key rather than reset: an organizer touching the wording of
+       * one section must not silently un-approve the nine the customer has
+       * already signed off. A key that was not there before starts unapproved,
+       * which is correct — nobody has seen it.
+       */
+      const approvedKeys = new Set(invitation.blocks.filter((b) => b.approved).map((b) => b.key));
       invitation.blocks = dto.blocks.map((b) => ({
         key: b.key,
         title: b.title,
@@ -132,6 +140,7 @@ export class InvitationService {
         hidden: b.hidden,
         heading: b.heading ?? '',
         body: b.body ?? '',
+        approved: approvedKeys.has(b.key),
       }));
       invitation.markModified('blocks');
     }
@@ -263,11 +272,55 @@ export class InvitationService {
     return this.view(invitation, booking);
   }
 
+  /**
+   * One section signed off.
+   *
+   * The guest link goes live only when the last visible section is approved —
+   * a hidden block is not shown to guests, so waiting on it would block the
+   * invitation on something nobody will read.
+   */
+  async approveBlock(
+    userId: string,
+    bookingId: string,
+    blockKey: string,
+  ): Promise<Record<string, unknown>> {
+    const booking = await this.customerBooking(userId, bookingId);
+    const invitation = await this.sharedInvitation(booking);
+
+    const block = invitation.blocks.find((b) => b.key === blockKey);
+    if (!block) throw new NotFoundException('That section is not on this invitation');
+
+    block.approved = true;
+
+    const outstanding = invitation.blocks.filter((b) => !b.hidden && !b.approved);
+    if (outstanding.length === 0 && invitation.status !== InvitationStatus.APPROVED) {
+      invitation.status = InvitationStatus.APPROVED;
+      invitation.approvedAt = new Date();
+      await invitation.save();
+
+      const organizerUserId = await this.organizerUserId(invitation.organizer);
+      await this.notify(
+        organizerUserId,
+        'Invitation approved',
+        `${booking.title} — the guest link is live.`,
+        `/organizer/invitation/${booking._id.toString()}`,
+      );
+      return this.view(invitation, booking);
+    }
+
+    await invitation.save();
+    return this.view(invitation, booking);
+  }
+
   /** Customer sign-off — this, and only this, makes the guest link live. */
   async approve(userId: string, bookingId: string): Promise<Record<string, unknown>> {
     const booking = await this.customerBooking(userId, bookingId);
     const invitation = await this.sharedInvitation(booking);
 
+    // Approving the invitation is approving every section of it.
+    invitation.blocks.forEach((b) => {
+      b.approved = true;
+    });
     invitation.status = InvitationStatus.APPROVED;
     invitation.approvedAt = new Date();
     await invitation.save();
@@ -432,7 +485,7 @@ export class InvitationService {
         rsvpDeadline: daysBefore(eventDate, RSVP_LEAD_DAYS),
         rsvpPlusOnes: true,
       },
-      blocks: DEFAULT_BLOCKS.map((b) => ({ ...b, hidden: false })),
+      blocks: DEFAULT_BLOCKS.map((b) => ({ ...b, hidden: false, approved: false })),
     });
   }
 
@@ -450,7 +503,21 @@ export class InvitationService {
       sentAt: invitation.sentAt ?? null,
       approvedAt: invitation.approvedAt ?? null,
       details: invitation.details,
-      blocks: invitation.blocks,
+      /*
+       * `approved` is reported true for every block of an already-approved
+       * invitation, including the ones stored before the field existed — the
+       * customer approved the whole thing, so every section of it is approved.
+       */
+      blocks: invitation.blocks.map((b) => ({
+        key: b.key,
+        title: b.title,
+        icon: b.icon,
+        owner: b.owner,
+        hidden: b.hidden,
+        heading: b.heading,
+        body: b.body,
+        approved: b.approved || invitation.status === InvitationStatus.APPROVED,
+      })),
       /*
        * Ids are surfaced because the builder needs a stable key per card for
        * React and for the calendar entry's UID — array index would change the

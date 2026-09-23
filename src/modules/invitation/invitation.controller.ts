@@ -75,6 +75,16 @@ export class InvitationController {
   /** Edit one of the sections the customer owns. 403 on anyone else's. */
   @UseGuards(RolesGuard)
   @Roles(Role.CUSTOMER, Role.ADMIN)
+  /** Sign off one section. The guest link goes live on the last one. */
+  @Post('mine/:bookingId/blocks/:blockKey/approve')
+  approveBlock(
+    @CurrentUser('userId') userId: string,
+    @Param('bookingId') bookingId: string,
+    @Param('blockKey') blockKey: string,
+  ) {
+    return this.invitationService.approveBlock(userId, bookingId, blockKey);
+  }
+
   @Patch('mine/:bookingId/blocks/:blockKey')
   personalize(
     @CurrentUser('userId') userId: string,
