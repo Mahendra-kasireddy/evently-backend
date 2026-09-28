@@ -59,6 +59,8 @@ export class InvitationController {
     return this.invitationService.listForCustomer(userId);
   }
 
+  @UseGuards(RolesGuard)
+  @Roles(Role.CUSTOMER, Role.ADMIN)
   @Get('mine/:bookingId')
   getForCustomer(@CurrentUser('userId') userId: string, @Param('bookingId') bookingId: string) {
     return this.invitationService.getForCustomer(userId, bookingId);
@@ -85,6 +87,8 @@ export class InvitationController {
     return this.invitationService.approveBlock(userId, bookingId, blockKey);
   }
 
+  @UseGuards(RolesGuard)
+  @Roles(Role.CUSTOMER, Role.ADMIN)
   @Patch('mine/:bookingId/blocks/:blockKey')
   personalize(
     @CurrentUser('userId') userId: string,

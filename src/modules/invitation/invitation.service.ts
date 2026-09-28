@@ -1,4 +1,10 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import {
@@ -6,6 +12,7 @@ import {
   Invitation,
   InvitationDocument,
   InvitationStatus,
+  InvitationStoryCard,
   InvitationSubEvent,
   SubEventVisibility,
 } from './schemas/invitation.schema';
@@ -13,18 +20,27 @@ import { Booking, BookingDocument } from '../booking/schemas/booking.schema';
 import { OrganizerService } from '../organizer/organizer.service';
 import { NotificationService } from '../notification/notification.service';
 import { NotificationType } from '../notification/schemas/notification.schema';
-import { UpdateInvitationDto } from './dto/update-invitation.dto';
+import { InvitationSubEventDto, UpdateInvitationDto } from './dto/update-invitation.dto';
+import { storyView } from './story.view';
+import { countdownTargetOf } from './countdown';
 import { PersonalizeBlockDto } from './dto/personalize-block.dto';
 import { RequestChangeDto } from './dto/request-change.dto';
 import {
   CARD_PALETTE,
+  BLOCK_TYPE_BY_KEY,
+  BlockType,
   DEFAULT_BLOCKS,
   DEFAULT_EYEBROW,
   DEFAULT_JOINER,
   DEFAULT_SUB_EVENT_MINUTES,
   DEFAULT_TEMPLATE_ID,
+  STORY_CAPTION_MAX,
+  STORY_MAX_CARDS,
+  HERO_VIDEO_MAX_SECONDS,
+  INVITATION_FONTS,
   INVITATION_TEMPLATES,
   RSVP_LEAD_DAYS,
+  WELCOME_MESSAGE_MAX,
 } from './invitation-defaults';
 
 const pad = (n: number): string => String(n).padStart(2, '0');
@@ -134,6 +150,8 @@ export class InvitationService {
       const approvedKeys = new Set(invitation.blocks.filter((b) => b.approved).map((b) => b.key));
       invitation.blocks = dto.blocks.map((b) => ({
         key: b.key,
+        /* The client does not choose a block's kind — the catalogue does. */
+        type: BLOCK_TYPE_BY_KEY[b.key] ?? BlockType.GENERIC,
         title: b.title,
         icon: b.icon,
         owner: b.owner,
@@ -150,7 +168,27 @@ export class InvitationService {
      * is the display order and is preserved exactly as sent.
      */
     if (dto.subEvents) {
+      /*
+       * Ids the invitation already owns, so an edit can keep them.
+       *
+       * The list is replaced wholesale, which without this would mint a new
+       * `_id` for every card on every save — and `details.countdownSubEventId`
+       * points at one of those ids, so editing a venue would silently unhook
+       * the countdown. An id is honoured only if it is in this set: anything
+       * else is a card the client is adding, whatever it claims.
+       */
+      const ownIds = new Set(
+        invitation.subEvents.map((e) => (e as { _id?: Types.ObjectId })._id?.toString() ?? ''),
+      );
+      /* The cards as they stand, by id, so a save can tell what changed. */
+      const before = new Map(
+        invitation.subEvents.map((e) => [
+          (e as { _id?: Types.ObjectId })._id?.toString() ?? '',
+          e,
+        ]),
+      );
       invitation.subEvents = dto.subEvents.map((e) => ({
+        ...(e.id && ownIds.has(e.id) ? { _id: new Types.ObjectId(e.id) } : {}),
         name: e.name,
         eventDate: e.eventDate ?? '',
         eventTime: e.eventTime ?? '',
@@ -162,8 +200,46 @@ export class InvitationService {
         note: e.note ?? '',
         colour: e.colour ?? '',
         visibility: e.visibility ?? SubEventVisibility.ALL_GUESTS,
+        /* Kept only where it means something. A card that reaches everyone
+           carrying a list of groups is a rule nobody can see and nobody
+           edited — it would resurface the moment the card was retargeted. */
+        groups: e.visibility === SubEventVisibility.GROUPS ? (e.groups ?? []) : [],
+        ...liveFieldsFor(e, e.id ? before.get(e.id) : undefined),
       })) as InvitationSubEvent[];
       invitation.markModified('subEvents');
+    }
+    /*
+     * The story, replacing whatever was stored. Mapped field by field like the
+     * sub-events above, and re-numbered from the array the organizer sent: the
+     * order they arranged is the order of the list, so deriving `order` from
+     * it is the only way the two cannot disagree. A client that sends its own
+     * numbering does not get to keep it.
+     */
+    if (dto.storyCards) {
+      invitation.storyCards = dto.storyCards.map((c, index) => ({
+        imageUrl: c.imageUrl,
+        imageKey: c.imageKey ?? '',
+        caption: (c.caption ?? '').trim(),
+        order: index,
+      })) as InvitationStoryCard[];
+      invitation.markModified('storyCards');
+    }
+    /*
+     * The countdown's target has to be one of *this* invitation's sub-events.
+     *
+     * Checked after the sub-events are applied, because one PATCH may add a
+     * card and point the countdown at it in the same breath. An id that names
+     * nothing here is rejected rather than quietly ignored: a countdown
+     * pointing at another event's ceremony would be a cross-event read, and
+     * one pointing at nothing would be a blank block nobody configured.
+     */
+    if (dto.details?.countdownSubEventId) {
+      const known = invitation.subEvents.some(
+        (e) => (e as { _id?: Types.ObjectId })._id?.toString() === dto.details?.countdownSubEventId,
+      );
+      if (!known) {
+        throw new BadRequestException('That event is not part of this invitation');
+      }
     }
     if (invitation.status === InvitationStatus.APPROVED) {
       invitation.status = InvitationStatus.DRAFT;
@@ -478,14 +554,21 @@ export class InvitationService {
         joiner: DEFAULT_JOINER,
         eventDate,
         eventTime: booking.eventDate ? isoTime(booking.eventDate) : '',
+        /* The booking's own location, seeded once. Putting it in both fields
+           printed the same street twice on the invitation. */
         venueName: booking.location ?? '',
-        venueAddress: booking.location ?? '',
+        venueAddress: '',
         message: '',
         rsvpEnabled: true,
         rsvpDeadline: daysBefore(eventDate, RSVP_LEAD_DAYS),
         rsvpPlusOnes: true,
       },
-      blocks: DEFAULT_BLOCKS.map((b) => ({ ...b, hidden: false, approved: false })),
+      blocks: DEFAULT_BLOCKS.map((b) => ({
+        ...b,
+        type: BLOCK_TYPE_BY_KEY[b.key] ?? BlockType.GENERIC,
+        hidden: false,
+        approved: false,
+      })),
     });
   }
 
@@ -510,6 +593,12 @@ export class InvitationService {
        */
       blocks: invitation.blocks.map((b) => ({
         key: b.key,
+        /* Derived where it was never stored, so a block written before types
+           existed still tells the client which renderer it needs. */
+        type:
+          b.type && b.type !== BlockType.GENERIC
+            ? b.type
+            : (BLOCK_TYPE_BY_KEY[b.key] ?? BlockType.GENERIC),
         title: b.title,
         icon: b.icon,
         owner: b.owner,
@@ -536,8 +625,38 @@ export class InvitationService {
         note: e.note,
         colour: e.colour,
         visibility: e.visibility,
+        groups: e.groups ?? [],
+        /* The builder edits these; the guest view decides what to do with
+           them. `liveStartedAt` is read-only here — it is the server's. */
+        liveEnabled: e.liveEnabled ?? false,
+        liveTitle: e.liveTitle ?? '',
+        liveUrl: e.liveUrl ?? '',
+        live360Url: e.live360Url ?? '',
+        liveVrUrl: e.liveVrUrl ?? '',
+        liveStartedAt: e.liveStartedAt ? e.liveStartedAt.toISOString() : '',
       })),
+      /*
+       * The catalogues the editor picks from, served rather than hard-coded in
+       * the app: a theme or a font the client invented would fail validation on
+       * the way back, so the client is given the set the server will accept.
+       */
+      /* Read back through `order` rather than in stored position, for the same
+         reason it is stored at all. */
+      storyCards: storyView(invitation, { withKeys: true }),
+      /*
+       * What the countdown counts down to, resolved to one absolute instant —
+       * the same figure the guest API sends, so the customer reviewing the
+       * invitation and their guests are counting to the same moment.
+       */
+      countdown: countdownTargetOf(invitation),
       templates: INVITATION_TEMPLATES,
+      fonts: INVITATION_FONTS,
+      limits: {
+        welcomeMessage: WELCOME_MESSAGE_MAX,
+        heroVideoSeconds: HERO_VIDEO_MAX_SECONDS,
+        storyCards: STORY_MAX_CARDS,
+        storyCaption: STORY_CAPTION_MAX,
+      },
       cardPalette: CARD_PALETTE,
       defaultSubEventMinutes: DEFAULT_SUB_EVENT_MINUTES,
       // Outstanding asks only — a resolved one is history, not a to-do.
@@ -583,4 +702,33 @@ export class InvitationService {
       this.logger.warn(`Invitation notification failed: ${String(err)}`);
     }
   }
+}
+
+/**
+ * One card's live-stream fields, carried forward across a save.
+ *
+ * `liveStartedAt` is the part that cannot come from the client: it is the
+ * moment the switch went on, and the pop-up and the LIVE banner both key off
+ * it. Rebuilding the subdocument would lose it, so a stream that was already
+ * on keeps the time it started, a stream just switched on is stamped now, and
+ * a stream switched off forgets — so switching it back on later is a new
+ * start and not a resumption of an hours-old one.
+ */
+function liveFieldsFor(
+  next: InvitationSubEventDto,
+  previous: InvitationSubEvent | undefined,
+): Partial<InvitationSubEvent> {
+  const url = (next.liveUrl ?? '').trim();
+  const enabled = (next.liveEnabled ?? false) && url !== '';
+  const wasOn = Boolean(previous?.liveEnabled) && (previous?.liveUrl ?? '').trim() !== '';
+  return {
+    liveEnabled: enabled,
+    liveTitle: (next.liveTitle ?? '').trim(),
+    liveUrl: url,
+    live360Url: (next.live360Url ?? '').trim(),
+    liveVrUrl: (next.liveVrUrl ?? '').trim(),
+    ...(enabled
+      ? { liveStartedAt: wasOn ? (previous?.liveStartedAt ?? new Date()) : new Date() }
+      : {}),
+  };
 }

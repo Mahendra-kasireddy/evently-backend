@@ -16,6 +16,7 @@ import { ConfigService } from '@nestjs/config';
 import { InvitationGuestService } from './invitation-guest.service';
 import { AddGuestDto, AddGuestsDto, UpdateGuestDto } from '../dto/add-guest.dto';
 import { ShareInvitationDto } from '../dto/share-invitation.dto';
+import { DismissNotificationDto } from '../dto/dismiss-notification.dto';
 import { guestAppUrl } from './share-links';
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import { Public } from '../../../common/decorators/public.decorator';
@@ -119,6 +120,40 @@ export class InvitationGuestController {
   @Get('shared/:token')
   viewShared(@Param('token') token: string) {
     return this.guests.viewByToken(token);
+  }
+
+  /**
+   * A guest dismissing the day-before notice, for good.
+   *
+   * Public for the same reason the view above is: the spec forbids guest
+   * login, so the token in the URL is the credential — and it is the only
+   * thing this takes. Nothing about which guest, which invitation or which
+   * event comes from the client.
+   */
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @Post('shared/:token/notification/dismiss')
+  dismissSharedNotification(
+    @Param('token') token: string,
+    @Body() dto: DismissNotificationDto,
+  ) {
+    return this.guests.dismissNotification(token, dto.kind);
+  }
+
+  /**
+   * A guest saying they still have the live stream open.
+   *
+   * Public for the same reason as the routes above, and it takes nothing but
+   * the token: which event is being watched, and whether this guest may watch
+   * it at all, are both resolved server-side. The answer is the number of
+   * guests of this invitation watching the same event right now — a count,
+   * never a list, so one guest cannot learn who else is there.
+   */
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @Post('shared/:token/live/ping')
+  pingSharedLive(@Param('token') token: string) {
+    return this.guests.pingLive(token);
   }
 
   /**

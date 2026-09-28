@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 import { idJsonTransform } from '../../../common/utils/id-transform';
+import { NotificationKind } from '../invitation-defaults';
 
 export type InvitationGuestDocument = HydratedDocument<InvitationGuest>;
 
@@ -77,6 +78,33 @@ export const GuestShareSchema = SchemaFactory.createForClass(GuestShare);
   collection: 'invitation_guests',
   toJSON: idJsonTransform(),
 })
+/**
+ * A notice this guest has been shown and has dismissed.
+ *
+ * Kept against the guest rather than in a collection of its own: it is a fact
+ * about one guest's relationship with one invitation, it is read on every
+ * view of that invitation, and it inherits the guest's ownership — so no
+ * second authorization rule has to agree with the first.
+ *
+ * `target` is what the notice was about — the sub-event id the countdown
+ * pointed at, or '' for the invitation's own date. Keyed by it on purpose: if
+ * the organizer repoints the countdown at a different ceremony, that is a
+ * different event, and a guest who dismissed the notice for the old one has
+ * not been told about the new one.
+ */
+@Schema({ _id: false })
+export class GuestNotification {
+  @Prop({ type: String, enum: NotificationKind, required: true })
+  kind: NotificationKind;
+
+  @Prop({ trim: true, default: '' })
+  target: string;
+
+  @Prop({ type: Date, required: true })
+  dismissedAt: Date;
+}
+export const GuestNotificationSchema = SchemaFactory.createForClass(GuestNotification);
+
 export class InvitationGuest {
   @Prop({ type: Types.ObjectId, ref: 'Invitation', required: true, index: true })
   invitation: Types.ObjectId;
@@ -114,6 +142,31 @@ export class InvitationGuest {
 
   @Prop({ type: Date })
   lastViewedAt?: Date;
+
+  /**
+   * Notices this guest has dismissed, so none is ever raised twice.
+   *
+   * On the record rather than in the browser: the requirement is that a
+   * dismissal survives a refresh, a new browser and a different device, and
+   * local storage survives none of those.
+   */
+  @Prop({ type: [GuestNotificationSchema], default: [] })
+  notifications: GuestNotification[];
+
+  /**
+   * When this guest last said they had the stream open, and which one.
+   *
+   * What makes the viewer count a count of people actually watching rather
+   * than of people who once loaded the page. Stored as a moment and read
+   * against a window, so a closed tab stops being counted without anything
+   * having to notice that it closed.
+   */
+  @Prop({ type: Date })
+  liveSeenAt?: Date;
+
+  /** The sub-event id the guest was last watching, or '' for none. */
+  @Prop({ trim: true, default: '' })
+  liveSeenTarget: string;
 
   createdAt?: Date;
   updatedAt?: Date;

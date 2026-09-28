@@ -16,7 +16,14 @@ import {
   ShareStatus,
 } from '../schemas/invitation-guest.schema';
 import { Booking, BookingDocument } from '../../booking/schemas/booking.schema';
+import { storyView } from '../story.view';
+import { groupOf, saveTheDateView } from '../save-the-date.view';
+import { countdownTargetOf, notificationFor } from '../countdown';
+import { liveNotificationFor, liveViewFor } from '../live.view';
+import { LIVE_WATCHING_WINDOW_MS, NotificationKind } from '../invitation-defaults';
 import {
+  BLOCK_TYPE_BY_KEY,
+  BlockType,
   CARD_PALETTE,
   DEFAULT_SUB_EVENT_MINUTES,
   INVITATION_TEMPLATES,
@@ -424,10 +431,22 @@ export class InvitationGuestService {
    * carries change requests, ownership and hidden sections, none of which are
    * a guest's business.
    */
-  async viewByToken(token: string): Promise<Record<string, unknown>> {
-    if (!token || token.length < 16)
+  /**
+   * Token in, guest and invitation out — the one place a share link is
+   * turned into an identity.
+   *
+   * Every public guest route goes through this and takes nothing else from
+   * the caller, so there is a single rule to read and a single rule to get
+   * right: the link says who you are, and an invitation that is not approved
+   * does not exist.
+   */
+  private async resolveGuest(token: string): Promise<{
+    guest: InvitationGuestDocument;
+    invitation: InvitationDocument;
+  }> {
+    if (!token || token.length < 16) {
       throw new NotFoundException('This invitation link is not valid');
-
+    }
     const guest = await this.guestModel.findOne({ token }).exec();
     if (!guest) throw new NotFoundException('This invitation link is not valid');
 
@@ -435,6 +454,11 @@ export class InvitationGuestService {
     if (!invitation || invitation.status !== InvitationStatus.APPROVED) {
       throw new NotFoundException('This invitation is not available');
     }
+    return { guest, invitation };
+  }
+
+  async viewByToken(token: string): Promise<Record<string, unknown>> {
+    const { guest, invitation } = await this.resolveGuest(token);
     const booking = await this.bookingModel.findById(guest.booking).exec();
     if (!booking) throw new NotFoundException('This invitation is not available');
 
@@ -444,6 +468,53 @@ export class InvitationGuestService {
     await guest.save();
 
     return this.guestView(invitation, booking, guest);
+  }
+
+  /**
+   * A guest saying they have read the day-before notice.
+   *
+   * The token is the credential and the only thing trusted: the guest, the
+   * invitation and the event it concerns are all resolved from it server-side,
+   * so no client-supplied id can reach another guest's record.
+   *
+   * The write is one conditional update rather than a read followed by a push.
+   * A guest with the invitation open in two tabs can dismiss twice at the same
+   * moment, and check-then-write would let both find nothing and both insert.
+   */
+  async dismissNotification(
+    token: string,
+    kind: NotificationKind = NotificationKind.ONE_DAY,
+  ): Promise<{ dismissed: true }> {
+    const { guest, invitation } = await this.resolveGuest(token);
+
+    /*
+     * Which notice, from the client; what it was about, from here.
+     *
+     * The kind is an enum the DTO has already checked, and it only ever picks
+     * between two notices this guest could be shown. The event it concerns is
+     * resolved server-side either way, so a guest cannot dismiss a notice on
+     * behalf of an event they were never shown.
+     */
+    const about =
+      kind === NotificationKind.LIVE_STARTED
+        ? (liveViewFor(invitation, groupOf(guest))?.subEventId ?? '')
+        : /* Recorded against the event the notice was about, so repointing the
+             countdown later raises a new notice rather than reusing this. */
+          (countdownTargetOf(invitation)?.subEventId ?? '');
+
+    await this.guestModel
+      .updateOne(
+        {
+          _id: guest._id,
+          notifications: { $not: { $elemMatch: { kind, target: about } } },
+        },
+        { $push: { notifications: { kind, target: about, dismissedAt: new Date() } } },
+      )
+      .exec();
+
+    /* Idempotent by design: dismissing something already dismissed is the
+       state the caller asked for, not an error to report. */
+    return { dismissed: true };
   }
 
   /** The name and event behind a token, for the link-preview meta tags. */
@@ -468,6 +539,71 @@ export class InvitationGuestService {
   }
 
   /**
+   * Which of the two notices to raise, when both are due.
+   *
+   * The live one wins. They compete only in the last day before an event, and
+   * of the two "it is happening right now, here is where to watch" is the one
+   * a guest can still act on — the day-before card has nothing to add once the
+   * thing it was warning about has begun.
+   */
+  private noticeFor(
+    invitation: InvitationDocument,
+    guest: InvitationGuestDocument,
+    countdown: ReturnType<typeof countdownTargetOf>,
+    live: ReturnType<typeof liveViewFor>,
+  ): Record<string, unknown> {
+    const liveNotice = liveNotificationFor(guest, live);
+    if (liveNotice.show) return liveNotice as unknown as Record<string, unknown>;
+    return notificationFor(
+      invitation,
+      guest,
+      countdown,
+      Date.now(),
+    ) as unknown as Record<string, unknown>;
+  }
+
+  /**
+   * A guest saying they still have the stream open, and being told how many
+   * others do.
+   *
+   * A heartbeat rather than a subscription: there is no socket here, and a
+   * count that is at most a minute and a half stale is what "248 watching"
+   * means to a reader anyway. The event being watched is resolved from the
+   * token exactly as everything else is — a guest cannot ask to be counted
+   * against, or read the count of, an event they were not invited to.
+   */
+  async pingLive(token: string): Promise<{ watching: number; live: boolean }> {
+    const { invitation, guest } = await this.resolveGuest(token);
+    const live = liveViewFor(invitation, groupOf(guest));
+    if (!live) {
+      /* Nothing on: stop counting this guest rather than leaving them
+         counted against an event that has since gone off air. */
+      await this.guestModel
+        .updateOne({ _id: guest._id }, { $set: { liveSeenTarget: '' } })
+        .exec();
+      return { watching: 0, live: false };
+    }
+
+    const now = new Date();
+    await this.guestModel
+      .updateOne(
+        { _id: guest._id },
+        { $set: { liveSeenAt: now, liveSeenTarget: live.subEventId } },
+      )
+      .exec();
+
+    const watching = await this.guestModel
+      .countDocuments({
+        invitation: invitation._id,
+        liveSeenTarget: live.subEventId,
+        liveSeenAt: { $gte: new Date(now.getTime() - LIVE_WATCHING_WINDOW_MS) },
+      })
+      .exec();
+
+    return { watching, live: true };
+  }
+
+  /**
    * What a guest is allowed to see.
    *
    * Built field by field rather than by deleting keys from the customer's
@@ -479,30 +615,102 @@ export class InvitationGuestService {
     booking: BookingDocument,
     guest: InvitationGuestDocument,
   ): Record<string, unknown> {
+    const d = invitation.details;
+    const countdown = countdownTargetOf(invitation);
+    /* Decided from the guest's own group, here, once — the client is handed
+       the stream it may watch or nothing at all. */
+    const live = liveViewFor(invitation, groupOf(guest));
     return {
       guest: { name: guest.name },
       bookingTitle: booking.title,
       occasion: booking.occasion,
-      details: invitation.details,
-      // Hidden sections never reach a guest, so the filter cannot be forgotten
-      // by a client that renders whatever it is handed.
-      blocks: invitation.blocks.filter((b) => !b.hidden),
-      subEvents: invitation.subEvents
-        .filter((e) => e.visibility === 'all' && e.name.trim() !== '')
-        .map((e) => ({
-          id: (e as { _id?: Types.ObjectId })._id?.toString() ?? '',
-          name: e.name,
-          eventDate: e.eventDate,
-          eventTime: e.eventTime,
-          endTime: e.endTime,
-          timezone: e.timezone,
-          venueName: e.venueName,
-          venueAddress: e.venueAddress,
-          dressCode: e.dressCode,
-          note: e.note,
-          colour: e.colour,
-          visibility: e.visibility,
+      /*
+       * Named field by field, as this method's contract says — the details
+       * document also carries working state (the hero media's storage key,
+       * the RSVP deadline, the post-event note) that is the organizer's, not
+       * the guest's. A spread would have handed all of it over the moment a
+       * field was added.
+       */
+      details: {
+        template: d.template,
+        fontStyle: d.fontStyle,
+        eyebrow: d.eyebrow,
+        hostOne: d.hostOne,
+        hostTwo: d.hostTwo,
+        joiner: d.joiner,
+        eventDate: d.eventDate,
+        eventTime: d.eventTime,
+        timezone: d.timezone,
+        venueName: d.venueName,
+        venueAddress: d.venueAddress,
+        message: d.message,
+        storyTitle: d.storyTitle,
+        heroMediaType: d.heroMediaType,
+        heroMediaUrl: d.heroMediaUrl,
+        heroMediaDurationSec: d.heroMediaDurationSec,
+        rsvpEnabled: d.rsvpEnabled,
+        rsvpDeadline: d.rsvpDeadline,
+        rsvpPlusOnes: d.rsvpPlusOnes,
+      },
+      /*
+       * The story, in order and without its storage handles — a guest is given
+       * the picture, not the means to address the file behind it.
+       */
+      storyCards: storyView(invitation),
+      /*
+       * What the countdown counts down to, as one absolute instant. The client
+       * ticks locally from this — a server that sent a remaining figure every
+       * second would be a request per second per guest, and would still be
+       * wrong by the time it arrived.
+       */
+      countdown: countdown && {
+        subEventId: countdown.subEventId,
+        name: countdown.name,
+        startsAt: countdown.startsAt,
+        timezone: countdown.timezone,
+        venueName: countdown.venueName,
+        venueAddress: countdown.venueAddress,
+        postEventMessage: d.postEventMessage,
+      },
+      /*
+       * Whether to raise the day-before notice with this guest, decided here.
+       * Only the answer and the words cross the wire — the organizer's
+       * settings and the other guests' dismissals stay on this side.
+       */
+      notification: this.noticeFor(invitation, guest, countdown, live),
+      /*
+       * The stream, when one is on and this guest is invited to the event it
+       * belongs to. Null the rest of the time, so the client has nothing to
+       * render rather than a section it must remember to hide.
+       */
+      live,
+      /*
+       * Hidden sections never reach a guest, so the filter cannot be forgotten
+       * by a client that renders whatever it is handed — and what does reach
+       * them carries no `owner` and no `approved`: whose section it is and who
+       * signed it off is the builder's business, not the reader's.
+       */
+      blocks: invitation.blocks
+        .filter((b) => !b.hidden)
+        .map((b) => ({
+          key: b.key,
+          /* Derived where it was never stored, so a block written before types
+             existed still tells the guest client which renderer it needs. */
+          type:
+            b.type && b.type !== BlockType.GENERIC
+              ? b.type
+              : (BLOCK_TYPE_BY_KEY[b.key] ?? BlockType.GENERIC),
+          title: b.title,
+          icon: b.icon,
+          heading: b.heading,
+          body: b.body,
         })),
+      /*
+       * Only the cards this guest is invited to, chosen on the server. The
+       * old filter here showed every card marked visible to all; targeting
+       * moved into one place that both this and the organizer's own view read.
+       */
+      subEvents: saveTheDateView(invitation, groupOf(guest)),
       templates: INVITATION_TEMPLATES,
       cardPalette: CARD_PALETTE,
       defaultSubEventMinutes: DEFAULT_SUB_EVENT_MINUTES,

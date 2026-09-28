@@ -1,6 +1,20 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 import { idJsonTransform } from '../../../common/utils/id-transform';
+import {
+  BlockOwner,
+  BlockType,
+  DEFAULT_FONT_ID,
+  HERO_VIDEO_MAX_SECONDS,
+  DEFAULT_MISSED_MESSAGE,
+  DEFAULT_ONE_DAY_MESSAGE,
+  HeroMediaType,
+  NOTIFICATION_MESSAGE_MAX,
+  STORY_CAPTION_MAX,
+  STORY_TITLE_MAX,
+  WELCOME_MESSAGE_MAX,
+} from '../invitation-defaults';
+import { GuestGroup } from './invitation-guest.schema';
 
 export type InvitationDocument = HydratedDocument<Invitation>;
 
@@ -15,16 +29,25 @@ export enum InvitationStatus {
 }
 
 /** Who fills a section in: the organizer, or the customer on their own screen. */
-export enum BlockOwner {
-  ORGANIZER = 'organizer',
-  CUSTOMER = 'customer',
-}
+/* Lives in the catalogue, which this module reads; re-exported so every
+   existing importer keeps its one import of it. */
+export { BlockOwner };
 
 /** One section of the guest invitation — and one row of the builder. */
 @Schema({ _id: false })
 export class InvitationBlock {
   @Prop({ required: true, trim: true })
   key: string;
+
+  /**
+   * Which editor and which guest renderer this block needs.
+   *
+   * The key names one block on one invitation; the type says what it is. It
+   * is what lets Story, Countdown and the rest be added as their own
+   * renderers later without the cover's code knowing about them.
+   */
+  @Prop({ type: String, enum: BlockType, default: BlockType.GENERIC })
+  type: BlockType;
 
   @Prop({ required: true, trim: true })
   title: string;
@@ -76,6 +99,14 @@ export const InvitationBlockSchema = SchemaFactory.createForClass(InvitationBloc
 export enum SubEventVisibility {
   /** Every guest who opens the invitation sees this card. */
   ALL_GUESTS = 'all',
+  /**
+   * Only guests filed under one of the card's groups.
+   *
+   * The groups are the ones the guest list already keeps — family, friends,
+   * work — so targeting a card reuses the filing the organizer has been doing
+   * all along rather than asking them to build a second list.
+   */
+  GROUPS = 'groups',
   /** Kept in the builder but not rendered to guests. */
   HIDDEN = 'hidden',
 }
@@ -143,6 +174,52 @@ export class InvitationSubEvent {
 
   @Prop({ type: String, enum: SubEventVisibility, default: SubEventVisibility.ALL_GUESTS })
   visibility: SubEventVisibility;
+
+  /**
+   * Which guest groups this card is for, when `visibility` is `groups`.
+   *
+   * Ignored for the other two, so a card switched back to "everyone" does not
+   * quietly keep a targeting rule nobody can see.
+   */
+  @Prop({ type: [String], enum: GuestGroup, default: [] })
+  groups: GuestGroup[];
+
+  /* ---- F5: this event's live stream --------------------------------------
+   *
+   * On the sub-event and not on the invitation, because "live" is a property
+   * of one ceremony: a wedding streams the muhurtham and not the mehendi, and
+   * the guests who may watch are exactly the guests invited to that event —
+   * a rule `visibility` and `groups` above already carry, so the stream
+   * inherits it rather than restating it in a second, disagreeable place.
+   */
+
+  /** The organizer's switch. Off means no guest is shown anything at all. */
+  @Prop({ type: Boolean, default: false })
+  liveEnabled: boolean;
+
+  @Prop({ trim: true, default: '', maxlength: 80 })
+  liveTitle: string;
+
+  /** Embed url, validated against the host allowlist on the way in. */
+  @Prop({ trim: true, default: '', maxlength: 500 })
+  liveUrl: string;
+
+  /** Optional alternates. A mode with no url is not offered to guests. */
+  @Prop({ trim: true, default: '', maxlength: 500 })
+  live360Url: string;
+
+  @Prop({ trim: true, default: '', maxlength: 500 })
+  liveVrUrl: string;
+
+  /**
+   * When the switch was last turned on.
+   *
+   * Recorded server-side so "it has started" is an observation and not a
+   * client's opinion: the pop-up, and the banner on an invitation that was
+   * already open, both key off this.
+   */
+  @Prop({ type: Date })
+  liveStartedAt?: Date;
 }
 export const InvitationSubEventSchema = SchemaFactory.createForClass(InvitationSubEvent);
 
@@ -178,8 +255,67 @@ export class InvitationDetails {
   @Prop({ trim: true, default: '' })
   venueAddress: string;
 
-  @Prop({ trim: true, default: '' })
+  /** The welcome message on the cover. One cap, shared with the DTO. */
+  @Prop({ trim: true, default: '', maxlength: WELCOME_MESSAGE_MAX })
   message: string;
+
+  /*
+   * The cover's hero media.
+   *
+   * Stored as the upload module returns it — a url and the storage key — so
+   * the media itself lives where every other upload does and nothing here
+   * duplicates that infrastructure. Empty type means the organizer has not
+   * uploaded anything, and the guest view falls back to the palette's own
+   * pattern rather than to a stock photograph of somebody else's wedding.
+   */
+  @Prop({ type: String, enum: HeroMediaType, default: HeroMediaType.NONE })
+  heroMediaType: HeroMediaType;
+
+  @Prop({ trim: true, default: '' })
+  heroMediaUrl: string;
+
+  @Prop({ trim: true, default: '' })
+  heroMediaKey: string;
+
+  /** What the story section is called, e.g. "Our Journey". */
+  @Prop({ trim: true, default: '', maxlength: STORY_TITLE_MAX })
+  storyTitle: string;
+
+  /**
+   * Which sub-event the countdown points at, by its id.
+   *
+   * A reference, not a copy: the sub-event owns its date, time, zone and
+   * venue, and a snapshot here would be the version that goes stale the moment
+   * the organizer moves the ceremony. Empty means the invitation's own date —
+   * which is also what an invitation with no sub-events counts down to.
+   */
+  @Prop({ trim: true, default: '' })
+  countdownSubEventId: string;
+
+  /** Whether the day-before notice is raised with guests at all. */
+  @Prop({ default: true })
+  oneDayNotificationEnabled: boolean;
+
+  /** The body of that notice, and of the one a guest gets if they miss it. */
+  @Prop({ trim: true, default: DEFAULT_ONE_DAY_MESSAGE, maxlength: NOTIFICATION_MESSAGE_MAX })
+  oneDayNotificationMessage: string;
+
+  @Prop({ trim: true, default: DEFAULT_MISSED_MESSAGE, maxlength: NOTIFICATION_MESSAGE_MAX })
+  missedNotificationMessage: string;
+
+  /**
+   * A video's length, as the uploading client measured it.
+   *
+   * Bounded at 30 on the way in. The server cannot re-measure it without a
+   * media pipeline, so this is the client's claim rather than a verified
+   * fact — it decides what the editor allows, not what the guest is served.
+   */
+  @Prop({ default: 0, min: 0, max: HERO_VIDEO_MAX_SECONDS })
+  heroMediaDurationSec: number;
+
+  /** One of INVITATION_FONTS — a style the app ships, never a family name. */
+  @Prop({ trim: true, default: DEFAULT_FONT_ID })
+  fontStyle: string;
 
   /**
    * IANA zone the wall-clock eventDate/eventTime above are expressed in.
@@ -215,6 +351,39 @@ export class InvitationDetails {
   rsvpPlusOnes: boolean;
 }
 export const InvitationDetailsSchema = SchemaFactory.createForClass(InvitationDetails);
+
+/**
+ * One photograph in the couple's story, and the line that goes under it.
+ *
+ * A subdocument on the invitation rather than a collection of its own: it
+ * belongs to exactly one invitation, is only ever read with it, and inherits
+ * its ownership — a story card cannot outlive or escape the invitation it was
+ * written for, and no second authorization rule has to agree with the first.
+ */
+@Schema({ _id: true })
+export class InvitationStoryCard {
+  /** As the upload endpoint returned it. Photographs only — never a video. */
+  @Prop({ required: true, trim: true, maxlength: 600 })
+  imageUrl: string;
+
+  /** Storage handle, for replacing or deleting. Never sent to a guest. */
+  @Prop({ trim: true, default: '', maxlength: 300 })
+  imageKey: string;
+
+  @Prop({ trim: true, default: '', maxlength: STORY_CAPTION_MAX })
+  caption: string;
+
+  /**
+   * Where this card sits in the story, stored rather than inferred.
+   *
+   * Array position would be the same thing until something reads the array
+   * back in a different order — a projection, a migration, a driver that does
+   * not promise order — and then the couple's story is told backwards.
+   */
+  @Prop({ required: true, min: 0 })
+  order: number;
+}
+export const InvitationStoryCardSchema = SchemaFactory.createForClass(InvitationStoryCard);
 
 /**
  * A change the customer asked for on a section they do not own.
@@ -277,6 +446,10 @@ export class Invitation {
    */
   @Prop({ type: [InvitationSubEventSchema], default: [] })
   subEvents: InvitationSubEvent[];
+
+  /** The story, in the order the organizer arranged it. */
+  @Prop({ type: [InvitationStoryCardSchema], default: [] })
+  storyCards: InvitationStoryCard[];
 
   @Prop({ type: [InvitationChangeRequestSchema], default: [] })
   changeRequests: InvitationChangeRequest[];
