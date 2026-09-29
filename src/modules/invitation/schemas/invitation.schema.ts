@@ -223,6 +223,50 @@ export class InvitationSubEvent {
 }
 export const InvitationSubEventSchema = SchemaFactory.createForClass(InvitationSubEvent);
 
+/**
+ * Shared Memories, as the customer configures it.
+ *
+ * A subdocument of its own rather than more fields on `InvitationDetails`,
+ * and that is the security design and not tidiness: `details` is written by
+ * the organizer's PATCH and read into the organizer's view, so a setting
+ * living there is one spread away from being theirs. These are the customer's
+ * — it is their guests, their photographs and their decision whether
+ * strangers can download them — so they sit where no organizer route
+ * touches them.
+ */
+@Schema({ _id: false })
+export class InvitationMemories {
+  /** The whole feature. Off means the section does not exist for anyone. */
+  @Prop({ type: Boolean, default: false })
+  enabled: boolean;
+
+  @Prop({ type: Boolean, default: true })
+  guestUpload: boolean;
+
+  @Prop({ type: Boolean, default: true })
+  guestView: boolean;
+
+  /** Off by default: someone else's wedding photographs are not a download. */
+  @Prop({ type: Boolean, default: false })
+  guestDownload: boolean;
+
+  /** On, every upload waits for the customer before any guest sees it. */
+  @Prop({ type: Boolean, default: false })
+  moderation: boolean;
+
+  /**
+   * `yyyy-mm-dd`, or '' to open from the moment the feature is switched on.
+   * Read against the invitation's own timezone, like every other date here.
+   */
+  @Prop({ trim: true, default: '' })
+  uploadFrom: string;
+
+  /** Days after the last celebration that uploads stay open. */
+  @Prop({ type: Number, default: 7, min: 0, max: 365 })
+  uploadWindowDays: number;
+}
+export const InvitationMemoriesSchema = SchemaFactory.createForClass(InvitationMemories);
+
 /** Event-level details every section of the invitation draws from. */
 @Schema({ _id: false })
 export class InvitationDetails {
@@ -450,6 +494,10 @@ export class Invitation {
   /** The story, in the order the organizer arranged it. */
   @Prop({ type: [InvitationStoryCardSchema], default: [] })
   storyCards: InvitationStoryCard[];
+
+  /** Shared Memories, as the customer configured it. Never organizer-writable. */
+  @Prop({ type: InvitationMemoriesSchema, default: () => ({}) })
+  memories: InvitationMemories;
 
   @Prop({ type: [InvitationChangeRequestSchema], default: [] })
   changeRequests: InvitationChangeRequest[];

@@ -182,10 +182,7 @@ export class InvitationService {
       );
       /* The cards as they stand, by id, so a save can tell what changed. */
       const before = new Map(
-        invitation.subEvents.map((e) => [
-          (e as { _id?: Types.ObjectId })._id?.toString() ?? '',
-          e,
-        ]),
+        invitation.subEvents.map((e) => [(e as { _id?: Types.ObjectId })._id?.toString() ?? '', e]),
       );
       invitation.subEvents = dto.subEvents.map((e) => ({
         ...(e.id && ownIds.has(e.id) ? { _id: new Types.ObjectId(e.id) } : {}),
@@ -491,7 +488,9 @@ export class InvitationService {
   // ---------------------------------------------------------------------------
 
   /** Booking that belongs to the calling organizer, or 403/404. */
-  private async organizerBooking(userId: string, bookingId: string): Promise<BookingDocument> {
+  /* Public for the same reason `customerBooking` is: Shared Memories asks the
+     same ownership question rather than carrying a second copy of it. */
+  async organizerBooking(userId: string, bookingId: string): Promise<BookingDocument> {
     if (!Types.ObjectId.isValid(bookingId)) throw new NotFoundException('Booking not found');
     const profile = await this.organizerService.findByUser(userId);
     if (!profile) {
@@ -506,7 +505,9 @@ export class InvitationService {
   }
 
   /** Booking that belongs to the calling customer, or 403/404. */
-  private async customerBooking(userId: string, bookingId: string): Promise<BookingDocument> {
+  /* Public so Shared Memories can ask the same question rather than asking
+     its own version of it. Still the only place the answer is worked out. */
+  async customerBooking(userId: string, bookingId: string): Promise<BookingDocument> {
     if (!Types.ObjectId.isValid(bookingId)) throw new NotFoundException('Booking not found');
     const booking = await this.bookingModel.findById(bookingId).exec();
     if (!booking) throw new NotFoundException('Booking not found');
@@ -523,7 +524,7 @@ export class InvitationService {
    * a 403 — from the customer's side nothing has been shared yet, which is the
    * normal early state their screen renders as "still being prepared".
    */
-  private async sharedInvitation(booking: BookingDocument): Promise<InvitationDocument> {
+  async sharedInvitation(booking: BookingDocument): Promise<InvitationDocument> {
     const invitation = await this.invitationModel.findOne({ booking: booking._id }).exec();
     if (!invitation || invitation.status === InvitationStatus.DRAFT) {
       throw new NotFoundException('No invitation has been shared with you for this event yet');

@@ -142,9 +142,7 @@ describe('the "it has started" card', () => {
     // Different notices about the same event. Dismissing one says nothing
     // about the other.
     const dismissedOneDay = guest({
-      notifications: [
-        { kind: NotificationKind.ONE_DAY, target: '', dismissedAt: new Date() },
-      ],
+      notifications: [{ kind: NotificationKind.ONE_DAY, target: '', dismissedAt: new Date() }],
     } as unknown as Partial<InvitationGuestDocument>);
     expect(liveNotificationFor(dismissedOneDay, live()).show).toBe(true);
   });

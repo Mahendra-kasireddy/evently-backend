@@ -268,8 +268,7 @@ export const NOTIFICATION_MESSAGE_MAX = 400;
 /* ---- F5: the live stream ------------------------------------------------ */
 
 /** What the "it's started" card says until the organizer writes their own. */
-export const DEFAULT_LIVE_MESSAGE =
-  'Join us and watch the celebration live from anywhere.';
+export const DEFAULT_LIVE_MESSAGE = 'Join us and watch the celebration live from anywhere.';
 
 /** What the live section is called until the organizer names it. */
 export const DEFAULT_LIVE_TITLE = 'Watch the ceremony live';

@@ -83,6 +83,32 @@ export class UploadService implements OnModuleInit {
     };
   }
 
+  /**
+   * A derived copy of something already uploaded — a thumbnail, a smaller
+   * display rendition — stored beside its original.
+   *
+   * The key is the original's with a suffix before the extension, so the three
+   * files sort together, the relationship is readable in a bucket listing, and
+   * deleting an original tells you exactly what else to delete. It goes through
+   * the same driver as everything else: this exposes the existing storage
+   * rather than being a second one.
+   */
+  async putVariant(
+    originalKey: string,
+    suffix: string,
+    body: Buffer,
+    extension: string,
+    contentType: string,
+  ): Promise<{ key: string; url: string }> {
+    if (!originalKey) throw new BadRequestException('A variant needs an original');
+    /* Strip the original's extension rather than appending to it, so a key
+       reads `…/<uuid>.thumb.webp` and not `…/<uuid>.jpg.thumb.webp`. */
+    const base = originalKey.replace(/\.[^./]+$/, '');
+    const key = `${base}.${suffix}.${extension}`;
+    const url = await this.driver.put(key, body, contentType);
+    return { key, url };
+  }
+
   /** Removes a previously uploaded object (best-effort). */
   remove(key: string): Promise<void> {
     return this.driver.remove(key);

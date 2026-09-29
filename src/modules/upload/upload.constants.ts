@@ -23,6 +23,10 @@ export enum UploadPurpose {
   PACKAGE_PHOTO = 'packagePhoto',
   /** The photo behind a service-category or occasion tile. */
   CATEGORY_IMAGE = 'categoryImage',
+  /** A guest's photograph in an invitation's shared memories. */
+  MEMORY_PHOTO = 'memoryPhoto',
+  /** A guest's clip in an invitation's shared memories. */
+  MEMORY_VIDEO = 'memoryVideo',
 }
 
 export interface ImageDimensionRule {
@@ -124,5 +128,22 @@ export const UPLOAD_RULES: Record<UploadPurpose, UploadRule> = {
     mimeTypes: IMAGE_MIMES,
     extensions: IMAGE_EXTS,
     image: { minWidth: 400, minHeight: 300, maxWidth: 6000, maxHeight: 4000 },
+  },
+  /*
+   * A guest's camera roll, so the floor is lower than the gallery's and the
+   * ceiling higher: a phone photograph is routinely 12MP, and refusing one for
+   * being 9MB would be refusing the feature. The minimum only rules out
+   * thumbnails and sticker-sized images, which are not memories of anything.
+   */
+  [UploadPurpose.MEMORY_PHOTO]: {
+    maxBytes: 20 * MB,
+    mimeTypes: IMAGE_MIMES,
+    extensions: IMAGE_EXTS,
+    image: { minWidth: 120, minHeight: 120, maxWidth: 12000, maxHeight: 12000 },
+  },
+  [UploadPurpose.MEMORY_VIDEO]: {
+    maxBytes: 100 * MB,
+    mimeTypes: VIDEO_MIMES,
+    extensions: VIDEO_EXTS,
   },
 };

@@ -2,11 +2,7 @@ import { Types } from 'mongoose';
 import { InvitationDocument, InvitationSubEvent } from './schemas/invitation.schema';
 import { GuestGroup, InvitationGuestDocument } from './schemas/invitation-guest.schema';
 import { guestSubEventsFor } from './save-the-date.view';
-import {
-  DEFAULT_LIVE_MESSAGE,
-  DEFAULT_LIVE_TITLE,
-  NotificationKind,
-} from './invitation-defaults';
+import { DEFAULT_LIVE_MESSAGE, DEFAULT_LIVE_TITLE, NotificationKind } from './invitation-defaults';
 
 /**
  * The live stream, as a guest reads it.

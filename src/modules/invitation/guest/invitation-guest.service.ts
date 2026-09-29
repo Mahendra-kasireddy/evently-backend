@@ -440,7 +440,9 @@ export class InvitationGuestService {
    * right: the link says who you are, and an invitation that is not approved
    * does not exist.
    */
-  private async resolveGuest(token: string): Promise<{
+  /* Public so Shared Memories resolves a share link through this one rule
+     rather than carrying a second copy of it. */
+  async resolveGuest(token: string): Promise<{
     guest: InvitationGuestDocument;
     invitation: InvitationDocument;
   }> {
@@ -554,12 +556,10 @@ export class InvitationGuestService {
   ): Record<string, unknown> {
     const liveNotice = liveNotificationFor(guest, live);
     if (liveNotice.show) return liveNotice as unknown as Record<string, unknown>;
-    return notificationFor(
-      invitation,
-      guest,
-      countdown,
-      Date.now(),
-    ) as unknown as Record<string, unknown>;
+    return notificationFor(invitation, guest, countdown, Date.now()) as unknown as Record<
+      string,
+      unknown
+    >;
   }
 
   /**
@@ -578,18 +578,13 @@ export class InvitationGuestService {
     if (!live) {
       /* Nothing on: stop counting this guest rather than leaving them
          counted against an event that has since gone off air. */
-      await this.guestModel
-        .updateOne({ _id: guest._id }, { $set: { liveSeenTarget: '' } })
-        .exec();
+      await this.guestModel.updateOne({ _id: guest._id }, { $set: { liveSeenTarget: '' } }).exec();
       return { watching: 0, live: false };
     }
 
     const now = new Date();
     await this.guestModel
-      .updateOne(
-        { _id: guest._id },
-        { $set: { liveSeenAt: now, liveSeenTarget: live.subEventId } },
-      )
+      .updateOne({ _id: guest._id }, { $set: { liveSeenAt: now, liveSeenTarget: live.subEventId } })
       .exec();
 
     const watching = await this.guestModel
@@ -684,6 +679,15 @@ export class InvitationGuestService {
        * render rather than a section it must remember to hide.
        */
       live,
+      /*
+       * Only the three switches a guest's own screen needs, never the
+       * customer's window settings or their moderation queue.
+       */
+      memories: {
+        enabled: Boolean(invitation.memories?.enabled),
+        guestView: Boolean(invitation.memories?.guestView),
+        guestUpload: Boolean(invitation.memories?.guestUpload),
+      },
       /*
        * Hidden sections never reach a guest, so the filter cannot be forgotten
        * by a client that renders whatever it is handed — and what does reach

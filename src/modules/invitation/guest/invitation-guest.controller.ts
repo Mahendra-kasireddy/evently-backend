@@ -133,10 +133,7 @@ export class InvitationGuestController {
   @Public()
   @HttpCode(HttpStatus.OK)
   @Post('shared/:token/notification/dismiss')
-  dismissSharedNotification(
-    @Param('token') token: string,
-    @Body() dto: DismissNotificationDto,
-  ) {
+  dismissSharedNotification(@Param('token') token: string, @Body() dto: DismissNotificationDto) {
     return this.guests.dismissNotification(token, dto.kind);
   }
 
