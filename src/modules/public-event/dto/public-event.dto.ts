@@ -309,8 +309,11 @@ export class TicketTypeDto {
   @Max(10_000_000)
   price: number;
 
+  /* At least one seat. A type with none can never be bought, and it used to
+     mark a brand-new event "sold out" the moment it was saved. To stop
+     selling a type, pause it. */
   @IsInt()
-  @Min(0)
+  @Min(1, { message: 'Quantity must be at least 1 ticket' })
   @Max(1_000_000)
   totalQuantity: number;
 
@@ -348,7 +351,7 @@ export class UpdateTicketTypeDto extends TicketTypeDto {
 
   @IsOptional()
   @IsInt()
-  @Min(0)
+  @Min(1, { message: 'Quantity must be at least 1 ticket' })
   @Max(1_000_000)
   declare totalQuantity: number;
 }

@@ -37,6 +37,8 @@ export interface EventLike {
 export interface TicketTypeLike {
   status: TicketTypeStatus;
   archived: boolean;
+  /** Seats it was created with. Absent on older callers, read as "had some". */
+  totalQuantity?: number;
   availableQuantity: number;
   salesStart?: Date | null;
   salesEnd?: Date | null;
@@ -88,15 +90,60 @@ export function perCustomerLimit(
 }
 
 /**
- * Whether an event is sold out: it has types, and not one of them can be
- * bought. An event with no ticket types at all is not sold out — it is
- * unfinished, and saying "sold out" about it would be a lie told to every
- * customer who found it.
+ * Whether an event is sold out: every ticket type that ever had seats has
+ * none left.
+ *
+ * Only stock decides it. A sales window that has not opened, or has closed, is
+ * not "sold out" — the seats are still there — and telling customers otherwise
+ * is false. A type created with no seats is a setup mistake, not a sell-out,
+ * so it does not count; and an event with no such types at all is unfinished.
  */
-export function isSoldOut(event: EventLike, types: TicketTypeLike[], now?: Date): boolean {
-  const live = types.filter((t) => !t.archived && t.status === TicketTypeStatus.ACTIVE);
-  if (live.length === 0) return false;
-  return live.every((t) => t.availableQuantity <= 0 || !isOnSale(event, t, now));
+export function isSoldOut(_event: EventLike, types: TicketTypeLike[]): boolean {
+  const stocked = types.filter(
+    (t) =>
+      !t.archived &&
+      t.status === TicketTypeStatus.ACTIVE &&
+      (t.totalQuantity === undefined || t.totalQuantity > 0),
+  );
+  if (stocked.length === 0) return false;
+  return stocked.every((t) => t.availableQuantity <= 0);
+}
+
+/** Where an event's ticket sales stand, as the customer is told it. */
+export type SaleState = 'on_sale' | 'sold_out' | 'upcoming' | 'closed' | 'unavailable';
+
+/**
+ * The one word for whether, and when, tickets can be bought.
+ *
+ * - on_sale: at least one ticket can be bought now.
+ * - sold_out: every stocked type has run out.
+ * - upcoming: seats exist and a sales window opens later (`opensAt`).
+ * - closed: seats exist but every window has ended, or the event has stopped
+ *   selling.
+ * - unavailable: nothing is set up to sell — no stocked, active type.
+ */
+export function saleStateOf(
+  event: EventLike,
+  types: TicketTypeLike[],
+  now: Date = new Date(),
+): { state: SaleState; opensAt: Date | null } {
+  if (isSoldOut(event, types)) return { state: 'sold_out', opensAt: null };
+  if (types.some((t) => isOnSale(event, t, now))) return { state: 'on_sale', opensAt: null };
+
+  const stocked = types.filter(
+    (t) =>
+      !t.archived &&
+      t.status === TicketTypeStatus.ACTIVE &&
+      t.availableQuantity > 0,
+  );
+  if (stocked.length === 0) return { state: 'unavailable', opensAt: null };
+
+  const opens = stocked
+    .map((t) => t.salesStart)
+    .filter((d): d is Date => d instanceof Date && d > now)
+    .sort((a, b) => a.getTime() - b.getTime());
+  if (opens.length > 0 && isSelling(event)) return { state: 'upcoming', opensAt: opens[0] };
+  return { state: 'closed', opensAt: null };
 }
 
 /** The last instant an attendee may add to the gallery. */

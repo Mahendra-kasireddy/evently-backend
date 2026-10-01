@@ -34,7 +34,9 @@ import {
   canWatchLive,
   isOnSale,
   isSelling,
+  isSoldOut,
   perCustomerLimit,
+  saleStateOf,
 } from './access';
 import {
   BrowsePublicEventsDto,
@@ -162,10 +164,33 @@ export class CustomerPublicEventService implements OnModuleInit {
     return 2 * EARTH_KM * Math.asin(Math.min(1, Math.sqrt(a)));
   }
 
+  /**
+   * Undo a SOLD_OUT the stock does not support.
+   *
+   * Older rules marked an event sold out when its sales window closed, or when
+   * its ticket types were saved with no seats. An event flagged that way would
+   * stay unbuyable forever, so it is corrected the moment anyone looks at it.
+   */
+  private async healSoldOut(
+    event: PublicEventDocument,
+    types: EventTicketTypeDocument[],
+  ): Promise<void> {
+    if (event.status !== PublicEventStatus.SOLD_OUT || isSoldOut(event, types)) return;
+    event.status = PublicEventStatus.PUBLISHED;
+    await this.eventModel
+      .updateOne(
+        { _id: event._id, status: PublicEventStatus.SOLD_OUT },
+        { $set: { status: PublicEventStatus.PUBLISHED } },
+      )
+      .exec();
+  }
+
   /** One row in a list: what a card needs, and nothing the organizer owns. */
   private async card(event: PublicEventDocument) {
     const types = await this.typeModel.find({ event: event._id, archived: false }).exec();
+    await this.healSoldOut(event, types);
     const now = new Date();
+    const sale = saleStateOf(event, types, now);
     const buyable = types.filter((t) => isOnSale(event, t, now));
     const prices = buyable.length ? buyable.map((t) => t.price) : types.map((t) => t.price);
 
@@ -180,7 +205,11 @@ export class CustomerPublicEventService implements OnModuleInit {
       venueName: event.venue?.name ?? '',
       city: event.venue?.city ?? '',
       startingPrice: prices.length ? Math.min(...prices) : 0,
-      soldOut: event.status === PublicEventStatus.SOLD_OUT || buyable.length === 0,
+      /* Sold out means no seats — not "sales closed" or "opens Friday",
+         which are their own states below. */
+      soldOut: sale.state === 'sold_out',
+      saleState: sale.state,
+      salesOpenAt: sale.opensAt,
       status: event.status,
       /* Whether there is a stream at all, and where it is up to. What a
          customer may *watch* is decided when they ask to, not here. */
@@ -208,6 +237,8 @@ export class CustomerPublicEventService implements OnModuleInit {
       .find({ event: event._id, archived: false })
       .sort({ price: 1 })
       .exec();
+    await this.healSoldOut(event, types);
+    const sale = saleStateOf(event, types, now);
 
     const standing = userId
       ? await this.standingOf(event._id, userId)
@@ -229,7 +260,9 @@ export class CustomerPublicEventService implements OnModuleInit {
       contactPhone: event.contactPhone,
       contactEmail: event.contactEmail,
       status: event.status,
-      soldOut: event.status === PublicEventStatus.SOLD_OUT,
+      soldOut: sale.state === 'sold_out',
+      saleState: sale.state,
+      salesOpenAt: sale.opensAt,
       canBook: isSelling(event),
 
       ticketTypes: types.map((t) => ({

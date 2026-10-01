@@ -21,6 +21,7 @@ import {
   isOnSale,
   isPubliclyVisible,
   isSoldOut,
+  saleStateOf,
   memoryUploadDeadline,
   perCustomerLimit,
 } from './access';
@@ -122,6 +123,42 @@ describe('sold out', () => {
     ];
     // The only type anybody can buy has run out, so the event has.
     expect(isSoldOut(event(), rows)).toBe(true);
+  });
+});
+
+describe('sold out means no seats, and nothing else', () => {
+  const now = new Date('2026-09-20T10:00:00.000Z');
+
+  it('is not sold out when the sales window has closed with seats left', () => {
+    const closed = [type({ salesEnd: new Date('2026-09-19T10:00:00.000Z') })];
+    expect(isSoldOut(event(), closed)).toBe(false);
+    expect(saleStateOf(event(), closed, now).state).toBe('closed');
+  });
+
+  it('is not sold out before sales open — it says when they do', () => {
+    const opens = new Date('2026-09-25T10:00:00.000Z');
+    const later = [type({ salesStart: opens })];
+    expect(isSoldOut(event(), later)).toBe(false);
+    expect(saleStateOf(event(), later, now)).toEqual({ state: 'upcoming', opensAt: opens });
+  });
+
+  it('does not call a type saved with no seats a sell-out', () => {
+    // The bug: a new event whose types all had quantity 0 read "Sold out".
+    const empty = [
+      type({ totalQuantity: 0, availableQuantity: 0 }),
+      type({ totalQuantity: 0, availableQuantity: 0 }),
+    ];
+    expect(isSoldOut(event(), empty)).toBe(false);
+    expect(saleStateOf(event(), empty, now).state).toBe('unavailable');
+  });
+
+  it('is sold out once every stocked type has gone', () => {
+    const gone = [type({ totalQuantity: 50, availableQuantity: 0 })];
+    expect(saleStateOf(event(), gone, now).state).toBe('sold_out');
+  });
+
+  it('is on sale while any ticket can be bought', () => {
+    expect(saleStateOf(event(), [type()], now).state).toBe('on_sale');
   });
 });
 
