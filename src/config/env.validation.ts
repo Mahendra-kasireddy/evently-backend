@@ -6,6 +6,8 @@ import * as Joi from 'joi';
  */
 export const envValidationSchema = Joi.object({
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
+  /** Confirms paid public-event tickets without the gateway. Ignored in production. */
+  PAYMENTS_TEST_MODE: Joi.string().valid('true', 'false').default('false'),
   PORT: Joi.number().default(3000),
   API_PREFIX: Joi.string().default('api'),
 

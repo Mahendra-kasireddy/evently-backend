@@ -103,7 +103,10 @@ describe('orientation and metadata', () => {
   it('carries no EXIF through — including where the photograph was taken', async () => {
     // Two hundred guests are about to be able to open this file.
     const withGps = await sharp(await photo(600, 400))
-      .withExif({ IFD0: { Copyright: 'Someone' }, GPS: { GPSLatitudeRef: 'N' } })
+      /* sharp's Exif type names only the IFD blocks it writes for you; GPS is
+         a real block the library passes through, so the cast is about the
+         typing, not about the data. Writing it is the point of the test. */
+      .withExif({ IFD0: { Copyright: 'Someone' }, GPS: { GPSLatitudeRef: 'N' } } as never)
       .jpeg()
       .toBuffer();
     const thumb = await makeThumbnail(withGps);

@@ -434,6 +434,62 @@ export class PaymentService {
     return booking;
   }
 
+  // ---------------------------------------------------------------------------
+  // The gateway, on its own
+  // ---------------------------------------------------------------------------
+
+  /*
+   * Everything above this line is about quotations and bookings — the private
+   * planning flow. The two methods below are about Razorpay and nothing else,
+   * and they exist so a second kind of sale (public event tickets) can use the
+   * same account, the same keys and the same signature check without this
+   * service learning what a ticket is, and without the booking path above
+   * changing in any way.
+   *
+   * What is deliberately NOT shared: the order record. A ticket sale keeps its
+   * own, because its lifecycle, its refunds and its idempotency belong to the
+   * thing being sold.
+   */
+
+  /**
+   * Open a Razorpay order for an amount this server has already worked out.
+   *
+   * The caller passes paise because that is what Razorpay counts in, and a
+   * receipt it can recognise its own sale by. No amount reaches here from a
+   * client — the caller is responsible for having computed it server-side,
+   * which is the same rule `createOrder` above follows.
+   */
+  async gatewayOrder(
+    amountInPaise: number,
+    receipt: string,
+  ): Promise<{ orderId: string; keyId: string; currency: 'INR' }> {
+    this.assertConfigured();
+    if (!Number.isInteger(amountInPaise) || amountInPaise <= 0) {
+      throw new BadRequestException('That amount cannot be charged.');
+    }
+
+    const order = await this.razorpay().orders.create({
+      amount: amountInPaise,
+      currency: CURRENCY,
+      receipt,
+    });
+
+    return { orderId: String(order.id), keyId: this.keyId(), currency: CURRENCY };
+  }
+
+  /**
+   * Whether Razorpay really said this payment happened.
+   *
+   * An HMAC of the order and payment ids under the key secret, which only this
+   * server holds — so a client cannot claim a payment it did not make. The
+   * comparison is constant-time, because a byte-by-byte one leaks the expected
+   * signature to anybody willing to time it.
+   */
+  verifyGatewaySignature(orderId: string, paymentId: string, signature: string): boolean {
+    this.assertConfigured();
+    return this.signatureMatches(orderId, paymentId, signature);
+  }
+
   private signatureMatches(orderId: string, paymentId: string, signature: string): boolean {
     const expected = createHmac('sha256', this.keySecret())
       .update(`${orderId}|${paymentId}`)
