@@ -76,6 +76,18 @@ export class NotificationService {
     link?: string,
   ): Promise<NotificationDocument | null> {
     if (!(await this.wants(userId, type))) return null;
+    /*
+     * One notice per unread thing, not one per trigger.
+     *
+     * The same event can fire repeatedly — an organizer pressing "send
+     * invitation" five times left the customer five identical cards. An
+     * identical notice still unread is replaced rather than stacked, so the
+     * customer sees it once, at the top, stamped with the latest time. Once
+     * read, a repeat is news again and arrives as a new one.
+     */
+    await this.notificationModel
+      .deleteMany({ user: userId, read: false, title, body, link: link ?? null })
+      .exec();
     return this.notificationModel.create({ user: userId, title, body, type, link });
   }
 

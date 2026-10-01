@@ -3,7 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
 import { OrganizerService } from '../organizer/organizer.service';
-import { OrganizerProfileDocument } from '../organizer/schemas/organizer-profile.schema';
+import { OnboardingStatus, OrganizerProfileDocument } from '../organizer/schemas/organizer-profile.schema';
 import {
   PlanServiceCategory,
   PlanServiceCategoryDocument,
@@ -51,6 +51,10 @@ export interface MatchedOrganizer {
   score: number;
   // True for Evently's own concierge fallback (always shown last).
   concierge: boolean;
+  // Card photo: cover, else first gallery shot, else profile photo; '' if none.
+  imageUrl: string;
+  // Passed admin verification (onboarding approved).
+  verified: boolean;
 }
 
 /**
@@ -306,6 +310,8 @@ export class PlanService {
         reasons,
         score: Math.round(score),
         concierge: !!o.concierge,
+        imageUrl: o.coverPhoto?.url || o.gallery?.[0]?.url || o.profilePhoto?.url || '',
+        verified: o.onboardingStatus === OnboardingStatus.APPROVED,
       };
       return { view, o, locScore };
     });
