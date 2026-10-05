@@ -74,7 +74,12 @@ export class EventMemoryService {
     };
   }
 
-  async upload(eventId: string, userId: string, file: Express.Multer.File | undefined, caption = '') {
+  async upload(
+    eventId: string,
+    userId: string,
+    file: Express.Multer.File | undefined,
+    caption = '',
+  ) {
     const event = await this.publicEvent(eventId);
     const standing = await this.customers.standingFor(event._id, userId);
     if (!canAttendeeUpload(event, standing)) {

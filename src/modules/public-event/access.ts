@@ -131,10 +131,7 @@ export function saleStateOf(
   if (types.some((t) => isOnSale(event, t, now))) return { state: 'on_sale', opensAt: null };
 
   const stocked = types.filter(
-    (t) =>
-      !t.archived &&
-      t.status === TicketTypeStatus.ACTIVE &&
-      t.availableQuantity > 0,
+    (t) => !t.archived && t.status === TicketTypeStatus.ACTIVE && t.availableQuantity > 0,
   );
   if (stocked.length === 0) return { state: 'unavailable', opensAt: null };
 

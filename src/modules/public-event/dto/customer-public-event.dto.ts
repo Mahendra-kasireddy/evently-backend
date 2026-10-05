@@ -55,9 +55,20 @@ export class BrowsePublicEventsDto {
   @Max(500)
   radiusKm?: number;
 
+  /**
+   * How far ahead to look.
+   *
+   * A window rather than two dates: "this weekend" is the question somebody
+   * browsing on a Thursday actually asks, and asking them to pick two dates to
+   * express it is making them do arithmetic.
+   */
   @IsOptional()
-  @IsEnum(['soon', 'price', 'new'])
-  sort?: 'soon' | 'price' | 'new';
+  @IsEnum(['any', 'today', 'weekend', 'month'])
+  when?: 'any' | 'today' | 'weekend' | 'month';
+
+  @IsOptional()
+  @IsEnum(['soon', 'price', 'new', 'popular'])
+  sort?: 'soon' | 'price' | 'new' | 'popular';
 
   @IsOptional()
   @Type(() => Number)

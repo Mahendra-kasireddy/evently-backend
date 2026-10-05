@@ -112,6 +112,9 @@ export class CustomerPublicEventService implements OnModuleInit {
     if (query.category) filter.category = { $regex: `^${query.category}$`, $options: 'i' };
     if (query.city) filter['venue.city'] = { $regex: `^${query.city}$`, $options: 'i' };
 
+    const window = this.whenWindow(query.when);
+    if (window) filter.startDateTime = window;
+
     const limit = query.limit ?? 20;
     const page = query.page ?? 0;
 
@@ -149,7 +152,67 @@ export class CustomerPublicEventService implements OnModuleInit {
     const cards = await Promise.all(near.map((e) => this.card(e)));
     if (query.sort === 'price') cards.sort((a, b) => a.startingPrice - b.startingPrice);
 
+    /*
+     * "Popular" is how many tickets an event has actually shifted, counted
+     * from the tickets themselves rather than from a view counter — a view is
+     * somebody who looked, and a sale is somebody who came.
+     */
+    if (query.sort === 'popular') {
+      const sold = await this.soldCounts(near.map((e) => e._id));
+      cards.sort((a, b) => (sold.get(b.id) ?? 0) - (sold.get(a.id) ?? 0));
+    }
+
     return { items: cards, page, limit };
+  }
+
+  /**
+   * The slice of the calendar a browser is asking about.
+   *
+   * Everything is bounded below by now, whichever window is chosen: an event
+   * that started an hour ago is not something anybody can still buy a ticket
+   * to, and listing it is listing a thing that cannot be done.
+   */
+  private whenWindow(when: string | undefined): { $gte: Date; $lte?: Date } | null {
+    if (!when || when === 'any') return null;
+    const now = new Date();
+
+    if (when === 'today') {
+      const end = new Date(now);
+      end.setHours(23, 59, 59, 999);
+      return { $gte: now, $lte: end };
+    }
+
+    if (when === 'weekend') {
+      /* Friday evening through Sunday night — and if it is already the
+         weekend, the rest of this one rather than the next. */
+      const day = now.getDay(); // 0 Sun … 6 Sat
+      const untilSunday = day === 0 ? 0 : 7 - day;
+      const end = new Date(now);
+      end.setDate(end.getDate() + untilSunday);
+      end.setHours(23, 59, 59, 999);
+      const start = new Date(now);
+      if (day !== 0 && day < 5) {
+        start.setDate(start.getDate() + (5 - day));
+        start.setHours(0, 0, 0, 0);
+      }
+      return { $gte: start > now ? start : now, $lte: end };
+    }
+
+    // month
+    const end = new Date(now);
+    end.setDate(end.getDate() + 30);
+    end.setHours(23, 59, 59, 999);
+    return { $gte: now, $lte: end };
+  }
+
+  /** How many tickets each of these events has sold. */
+  private async soldCounts(ids: Types.ObjectId[]): Promise<Map<string, number>> {
+    if (ids.length === 0) return new Map();
+    const rows = await this.ticketModel.aggregate<{ _id: Types.ObjectId; n: number }>([
+      { $match: { event: { $in: ids }, status: { $in: OCCUPYING_TICKET_STATUSES } } },
+      { $group: { _id: '$event', n: { $sum: 1 } } },
+    ]);
+    return new Map(rows.map((r) => [r._id.toString(), r.n]));
   }
 
   private distanceKm(lat: number, lng: number, event: PublicEventDocument): number | null {
@@ -741,6 +804,7 @@ export class CustomerPublicEventService implements OnModuleInit {
  */
 export function paymentsTestMode(): boolean {
   return (
-    process.env.PAYMENTS_TEST_MODE === 'true' && (process.env.NODE_ENV ?? 'development') !== 'production'
+    process.env.PAYMENTS_TEST_MODE === 'true' &&
+    (process.env.NODE_ENV ?? 'development') !== 'production'
   );
 }
