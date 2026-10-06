@@ -78,11 +78,15 @@ export class OrganizerController {
   // Authenticated — organizer registration & onboarding (owner-scoped)
   // ---------------------------------------------------------------------------
 
-  /** Upgrade the current (OTP-verified) user to an organizer + create a draft profile. */
+  /**
+   * Sign up as an organizer: adds the role, creates (or resumes) the profile
+   * with whatever basic details are sent, and opens the dashboard at once.
+   * Verification comes later, from the dashboard's go-live checklist.
+   */
   @Throttle({ default: { limit: 10, ttl: 600_000 } })
   @Post('register')
-  register(@CurrentUser('userId') userId: string) {
-    return this.onboardingService.register(userId);
+  register(@CurrentUser('userId') userId: string, @Body() dto: UpdateOrganizerProfileDto) {
+    return this.onboardingService.register(userId, dto);
   }
 
   /** The current user's organizer profile (resume draft, or post-approval edit). */

@@ -161,7 +161,8 @@ export class SubvendorService {
     userId: string,
     dto: OnboardSubvendorDto,
   ): Promise<{ profile: SubVendorProfileView; token: string; refreshToken: string }> {
-    const user = await this.userService.addRole(userId, Role.VENDOR);
+    // Registering a business is an explicit choice of where to land next time.
+    const user = await this.userService.addRole(userId, Role.VENDOR, { makeDefault: true });
 
     let profile = await this.findByUser(userId);
     if (!profile) {

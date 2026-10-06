@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@n
 import { UserService } from './user.service';
 import { UpdateProfileDto, UpdateUserDto } from './dto/update-user.dto';
 import { UpdatePreferencesDto } from './dto/update-preferences.dto';
+import { SetDefaultRoleDto } from './dto/set-default-role.dto';
 import { CurrentUser, AuthUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -34,7 +35,17 @@ export class UserController {
    */
   @Patch('updateProfile')
   updateProfile(@CurrentUser() user: AuthUser, @Body() dto: UpdateProfileDto) {
+    this.userService.assertOwnUpload(dto.photoUrl);
     return this.userService.update(user.userId, dto);
+  }
+
+  /**
+   * Which side of the product this account opens on after sign-in — customer,
+   * organizer or sub-vendor. Must be a role the account already holds.
+   */
+  @Patch('default-role')
+  setDefaultRole(@CurrentUser('userId') userId: string, @Body() dto: SetDefaultRoleDto) {
+    return this.userService.setDefaultRole(userId, dto.role);
   }
 
   /** The customer's own notification choices. */

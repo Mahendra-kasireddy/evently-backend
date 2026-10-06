@@ -21,8 +21,10 @@ export enum OrganizerTier {
  * allowed edges live in organizer-lifecycle.ts and are enforced server-side.
  */
 export enum OnboardingStatus {
-  PENDING_REVIEW = 'pending_review', // registered via OTP; awaiting admin gate 1
-  DRAFT = 'draft', // admitted to onboarding; nothing filled in yet
+  // Legacy: the retired "admin admits you first" gate. New sign-ups start at
+  // DRAFT; a profile still here is admitted automatically on its next register call.
+  PENDING_REVIEW = 'pending_review',
+  DRAFT = 'draft', // signed up; dashboard open, go-live checklist not started
   IN_PROGRESS = 'in_progress', // some steps saved
   SUBMITTED = 'submitted', // submitted for verification (gate 2)
   CHANGES_REQUESTED = 'changes_requested', // admin sent it back for edits

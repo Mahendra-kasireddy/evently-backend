@@ -201,11 +201,13 @@ export class AdminOrganizerService {
         'Your organizer registration has been reopened. You can continue your onboarding.',
       );
     } else {
-      // Gate 2 — refuse to publish an incomplete profile even on admin action.
-      const completion = this.onboarding.completionFor(profile);
-      if (completion.percent < 100) {
+      // Verification — refuse to publish a profile missing anything needed to
+      // go live, even on admin action. Bank details are not among them: they
+      // are needed before the organizer's first payout, not before listing.
+      const goLive = this.onboarding.goLiveFor(profile);
+      if (goLive.missing.length > 0) {
         throw new BadRequestException(
-          `Onboarding is only ${completion.percent}% complete. Outstanding: ${completion.missing.join(', ')}`,
+          `Profile is not ready to go live. Outstanding: ${goLive.missing.join(', ')}`,
         );
       }
       await this.transition(profile, OnboardingStatus.APPROVED, adminId, {

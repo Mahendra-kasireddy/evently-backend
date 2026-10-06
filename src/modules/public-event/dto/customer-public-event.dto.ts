@@ -70,6 +70,14 @@ export class BrowsePublicEventsDto {
   @IsEnum(['soon', 'price', 'new', 'popular'])
   sort?: 'soon' | 'price' | 'new' | 'popular';
 
+  /**
+   * Events with a live stream: `now` — streaming at this moment; `upcoming` —
+   * a stream is scheduled and has not started. Omitted, streams don't matter.
+   */
+  @IsOptional()
+  @IsEnum(['now', 'upcoming'])
+  live?: 'now' | 'upcoming';
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()

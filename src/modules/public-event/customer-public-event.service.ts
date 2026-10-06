@@ -60,6 +60,38 @@ const EARTH_KM = 6371;
  *   - take a price, a total or an organizer id from the caller,
  *   - mint a ticket without a payment this server verified itself.
  */
+/**
+ * Events whose live stream is on right now, or scheduled and not yet begun.
+ * Mirrors `liveStateOf`: a stream with no end is live from its start onward.
+ * Exported for the tests.
+ */
+export function liveStreamFilter(
+  live: 'now' | 'upcoming',
+  now: Date,
+): FilterQuery<PublicEventDocument> {
+  if (live === 'upcoming') {
+    return { 'liveStream.enabled': true, 'liveStream.startsAt': { $gt: now } };
+  }
+  return {
+    'liveStream.enabled': true,
+    'liveStream.startsAt': { $lte: now },
+    $or: [{ 'liveStream.endsAt': { $gt: now } }, { 'liveStream.endsAt': null }],
+  };
+}
+
+/**
+ * An event that is still on or still to come: its end is in the future, or —
+ * with no end set — its start is. Exported for the tests.
+ */
+export function notEndedBy(now: Date): FilterQuery<PublicEventDocument> {
+  return {
+    $or: [
+      { endDateTime: { $gt: now } },
+      { endDateTime: null, startDateTime: { $gt: now } },
+    ],
+  };
+}
+
 @Injectable()
 export class CustomerPublicEventService implements OnModuleInit {
   private readonly logger = new Logger(CustomerPublicEventService.name);
@@ -99,6 +131,13 @@ export class CustomerPublicEventService implements OnModuleInit {
   async browse(query: BrowsePublicEventsDto) {
     const filter: FilterQuery<PublicEventDocument> = {
       status: { $in: PUBLIC_STATUSES },
+      /*
+       * Only events that have not ended. A finished event stays public — its
+       * page and its memories still open from a ticket — but it is not
+       * something to offer anybody, and under "popular" (ranked by tickets
+       * sold) last month's sell-out would otherwise outrank everything on sale.
+       */
+      $and: [notEndedBy(new Date())],
     };
 
     if (query.q) {
@@ -114,6 +153,8 @@ export class CustomerPublicEventService implements OnModuleInit {
 
     const window = this.whenWindow(query.when);
     if (window) filter.startDateTime = window;
+
+    if (query.live) filter.$and!.push(liveStreamFilter(query.live, new Date()));
 
     const limit = query.limit ?? 20;
     const page = query.page ?? 0;

@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -41,13 +42,27 @@ interface ReqField {
 interface StepDef {
   id: string;
   title: string;
+  /**
+   * Whether this step stands between the organizer and going live. Bank
+   * details do not: they are needed to be paid, not to be listed, so they are
+   * asked for before the first payout rather than before verification.
+   */
+  goLive: boolean;
   required: ReqField[];
 }
 
-/** Per-step required fields — drive completion %, step status and submission. */
+/**
+ * Per-step required fields — drive completion %, step status and submission.
+ *
+ * Onboarding is progressive. Sign-up takes only SIGNUP_FIELDS and opens the
+ * dashboard at once; everything else is a checklist the organizer works
+ * through from there. Submitting for verification needs every `goLive` step;
+ * an admin's approval is what lists them for customers.
+ */
 const STEPS: StepDef[] = [
   {
     id: 'basic',
+    goLive: true,
     title: 'Basic information',
     required: [
       { key: 'firstName', label: 'First name', kind: 'text' },
@@ -61,29 +76,8 @@ const STEPS: StepDef[] = [
     ],
   },
   {
-    id: 'verification',
-    title: 'Verification',
-    required: [
-      { key: 'aadhaarNumber', label: 'Aadhaar number', kind: 'text' },
-      { key: 'panNumber', label: 'PAN number', kind: 'text' },
-      { key: 'governmentIdType', label: 'Government ID type', kind: 'text' },
-      { key: 'governmentIdFile', label: 'Government ID upload', kind: 'file' },
-      { key: 'panFile', label: 'PAN upload', kind: 'file' },
-    ],
-  },
-  {
-    id: 'bank',
-    title: 'Bank details',
-    required: [
-      { key: 'accountHolderName', label: 'Account holder name', kind: 'text' },
-      { key: 'bankName', label: 'Bank name', kind: 'text' },
-      { key: 'accountNumber', label: 'Account number', kind: 'text' },
-      { key: 'ifsc', label: 'IFSC', kind: 'text' },
-      { key: 'cancelledChequeFile', label: 'Cancelled cheque', kind: 'file' },
-    ],
-  },
-  {
     id: 'services',
+    goLive: true,
     title: 'Services',
     required: [
       { key: 'experience', label: 'Experience', kind: 'text' },
@@ -98,11 +92,36 @@ const STEPS: StepDef[] = [
   },
   {
     id: 'portfolio',
+    goLive: true,
     title: 'Profile & portfolio',
     required: [
       { key: 'businessDescription', label: 'Business description', kind: 'text' },
       { key: 'coverPhoto', label: 'Cover photo', kind: 'file' },
       { key: 'gallery', label: 'Gallery images', kind: 'array' },
+    ],
+  },
+  {
+    id: 'verification',
+    goLive: true,
+    title: 'Verification',
+    required: [
+      { key: 'aadhaarNumber', label: 'Aadhaar number', kind: 'text' },
+      { key: 'panNumber', label: 'PAN number', kind: 'text' },
+      { key: 'governmentIdType', label: 'Government ID type', kind: 'text' },
+      { key: 'governmentIdFile', label: 'Government ID upload', kind: 'file' },
+      { key: 'panFile', label: 'PAN upload', kind: 'file' },
+    ],
+  },
+  {
+    id: 'bank',
+    goLive: false,
+    title: 'Bank details',
+    required: [
+      { key: 'accountHolderName', label: 'Account holder name', kind: 'text' },
+      { key: 'bankName', label: 'Bank name', kind: 'text' },
+      { key: 'accountNumber', label: 'Account number', kind: 'text' },
+      { key: 'ifsc', label: 'IFSC', kind: 'text' },
+      { key: 'cancelledChequeFile', label: 'Cancelled cheque', kind: 'file' },
     ],
   },
 ];
@@ -111,10 +130,27 @@ const ALL_REQUIRED: Array<ReqField & { stepId: string }> = STEPS.flatMap((s) =>
   s.required.map((f) => ({ ...f, stepId: s.id })),
 );
 
+/** What must be filled before the profile can be submitted for verification. */
+const GO_LIVE_REQUIRED = ALL_REQUIRED.filter(
+  (f) => STEPS.find((s) => s.id === f.stepId)?.goLive,
+);
+
+/** What must be filled before the organizer can be paid. */
+const PAYOUT_REQUIRED = ALL_REQUIRED.filter((f) => f.stepId === 'bank');
+
 interface FileView {
   url: string;
   key: string;
   originalName: string;
+}
+
+export interface StepStatus {
+  id: string;
+  title: string;
+  complete: boolean;
+  missingFields: string[];
+  /** False for steps that are not needed to go live (bank details). */
+  requiredForGoLive: boolean;
 }
 
 export interface OrganizerProfileView {
@@ -124,6 +160,10 @@ export interface OrganizerProfileView {
   submittedAt: string | null;
   /** True when this organizer may currently write their own onboarding. */
   canEdit: boolean;
+  /** True when bank details may be written — also after submission, until they are on file. */
+  canEditBank: boolean;
+  /** True once bank details are on file — needed before the first payout. */
+  payoutReady: boolean;
   /** The outstanding admin reason (rejection / changes requested), if any. */
   reviewNote: string;
   // Step 1
@@ -211,10 +251,23 @@ export class OrganizerOnboardingService {
   // Registration
   // ---------------------------------------------------------------------------
 
+  /**
+   * Registers the signed-in account as an organizer — sign-up, not review.
+   *
+   * Takes the basic details the sign-up form collects (all optional, so the
+   * call doubles as "resume my registration") and opens onboarding straight
+   * away: there is no admin gate before the organizer may use the dashboard.
+   * Being listed for customers still waits on verification — see
+   * `completeOnboarding` and the admin approval that sets `active`.
+   */
   async register(
     userId: string,
+    dto: UpdateOrganizerProfileDto = {},
   ): Promise<{ profile: OrganizerProfileView; token: string; refreshToken: string }> {
-    const user = await this.userService.addRole(userId, Role.ORGANIZER);
+    await this.assertKnownOptions(dto);
+
+    // Registering a business is an explicit choice of where to land next time.
+    const user = await this.userService.addRole(userId, Role.ORGANIZER, { makeDefault: true });
 
     let profile = await this.profileModel
       .findOne({ user: new Types.ObjectId(userId), deletedAt: null })
@@ -222,27 +275,57 @@ export class OrganizerOnboardingService {
 
     const isNew = !profile;
     if (!profile) {
-      profile = await this.profileModel.create({
+      profile = new this.profileModel({
         user: new Types.ObjectId(userId),
-        name: user.name || 'New organizer',
-        // OTP verification is not approval: a new registration waits for gate 1.
-        onboardingStatus: OnboardingStatus.PENDING_REVIEW,
+        name: dto.businessName || user.name || 'New organizer',
+        onboardingStatus: OnboardingStatus.DRAFT,
         profileCompletion: 0,
         active: false,
       });
       appendReview(profile, {
         action: OrganizerReviewAction.REGISTERED,
-        fromStatus: OnboardingStatus.PENDING_REVIEW,
-        toStatus: OnboardingStatus.PENDING_REVIEW,
+        fromStatus: OnboardingStatus.DRAFT,
+        toStatus: OnboardingStatus.DRAFT,
         actorRole: ReviewActorRole.ORGANIZER,
         actorId: userId,
         actorName: user.name || '',
       });
-      await profile.save();
+    } else if (profile.onboardingStatus === OnboardingStatus.PENDING_REVIEW) {
+      // Registered under the retired "admin admits you first" gate. That gate
+      // no longer exists for anyone else, so it does not hold this organizer
+      // back either: let them in, on the record.
+      assertTransition(OnboardingStatus.PENDING_REVIEW, OnboardingStatus.DRAFT);
+      profile.onboardingStatus = OnboardingStatus.DRAFT;
+      appendReview(profile, {
+        action: OrganizerReviewAction.ADMITTED,
+        fromStatus: OnboardingStatus.PENDING_REVIEW,
+        toStatus: OnboardingStatus.DRAFT,
+        reason: 'Registration review retired — admitted to onboarding automatically',
+        actorRole: ReviewActorRole.ORGANIZER,
+        actorId: userId,
+        actorName: user.name || '',
+      });
+    }
+
+    // The sign-up details. Ignored once the profile is no longer the
+    // organizer's to edit (submitted, live, rejected) — a repeat
+    // registration must not rewrite a verified profile.
+    if (canOrganizerEdit(profile.onboardingStatus)) {
+      this.applyBasic(profile, dto);
+      const { percent } = this.overall(profile);
+      profile.profileCompletion = percent;
+      if (percent > 0 && profile.onboardingStatus === OnboardingStatus.DRAFT) {
+        profile.onboardingStatus = OnboardingStatus.IN_PROGRESS;
+      }
+    }
+    await profile.save();
+    await this.fillMissingUserBasics(user, profile);
+
+    if (isNew) {
       await this.notify(
         userId,
-        'Registration received',
-        'Thanks for registering as an Evently organizer. Our team is reviewing your registration — we’ll let you know as soon as you can start onboarding.',
+        'Welcome to Evently for organizers',
+        'Your dashboard is ready. Finish your profile and verification to go live and start receiving enquiries.',
       );
     }
 
@@ -274,7 +357,11 @@ export class OrganizerOnboardingService {
     dto: UpdateOrganizerProfileDto,
   ): Promise<OrganizerProfileView> {
     const { profile, user } = await this.loadForEdit(userId);
+    this.applyBasic(profile, dto);
+    return this.finalizeSave(userId, profile, user);
+  }
 
+  private applyBasic(profile: OrganizerProfileDocument, dto: UpdateOrganizerProfileDto): void {
     if (dto.firstName !== undefined) profile.firstName = dto.firstName;
     if (dto.lastName !== undefined) profile.lastName = dto.lastName;
     if (dto.contactEmail !== undefined) profile.contactEmail = dto.contactEmail;
@@ -287,8 +374,18 @@ export class OrganizerOnboardingService {
 
     const preferredName = profile.displayName || profile.businessName;
     if (preferredName) profile.name = preferredName;
+  }
 
-    return this.finalizeSave(userId, profile, user);
+  /** Refuses a category, city or business type the admin has not configured. */
+  private async assertKnownOptions(dto: UpdateOrganizerProfileDto): Promise<void> {
+    const [btOk, catOk, cityOk] = await Promise.all([
+      dto.businessType ? this.configService.businessTypeExists(dto.businessType) : true,
+      dto.primaryCategory ? this.configService.categoryExists(dto.primaryCategory) : true,
+      dto.city ? this.configService.cityExists(dto.city) : true,
+    ]);
+    if (!btOk) throw new BadRequestException('Invalid business type');
+    if (!catOk) throw new BadRequestException('Invalid primary category');
+    if (!cityOk) throw new BadRequestException('Invalid city');
   }
 
   /** Step 2 — Verification (with duplicate PAN / GST detection). */
@@ -318,9 +415,23 @@ export class OrganizerOnboardingService {
     return this.finalizeSave(userId, profile, user);
   }
 
-  /** Step 3 — Bank details. */
+  /**
+   * Bank details.
+   *
+   * Not part of verification, so they stay open after the profile is
+   * submitted or live — an organizer adds them whenever their first payout
+   * comes up. Once a complete set is on file, though, changing it after
+   * submission goes through support: a silent edit is how a hijacked account
+   * would redirect someone's earnings.
+   */
   async updateBank(userId: string, dto: UpdateBankDto): Promise<OrganizerProfileView> {
-    const { profile, user } = await this.loadForEdit(userId);
+    const { profile, user } = await this.load(userId);
+    if (!this.canEditBank(profile)) {
+      assertOrganizerCanEdit(profile.onboardingStatus);
+      throw new ForbiddenException(
+        'Your bank details are on file. Contact Evently support to change them.',
+      );
+    }
 
     if (dto.accountHolderName !== undefined) profile.accountHolderName = dto.accountHolderName;
     if (dto.bankName !== undefined) profile.bankName = dto.bankName;
@@ -400,10 +511,18 @@ export class OrganizerOnboardingService {
     currentStep: string;
     completedSteps: string[];
     submittedAt: string | null;
-    steps: Array<{ id: string; title: string; complete: boolean; missingFields: string[] }>;
+    steps: StepStatus[];
+    /** True when every go-live step is filled and the profile can be submitted. */
+    canSubmit: boolean;
+    /** Go-live fields still missing, by label. Bank details are not among them. */
+    goLiveMissing: string[];
+    /** True once bank details are on file — needed before the first payout. */
+    payoutReady: boolean;
+    canEditBank: boolean;
   }> {
     const { profile } = await this.load(userId);
     const steps = this.stepStatus(profile);
+    const goLiveMissing = this.goLive(profile).missing.map((m) => m.label);
     const completedSteps = steps.filter((s) => s.complete).map((s) => s.id);
     const currentStep = steps.find((s) => !s.complete)?.id ?? steps[steps.length - 1]!.id;
     return {
@@ -415,6 +534,10 @@ export class OrganizerOnboardingService {
       completedSteps,
       submittedAt: profile.submittedAt ? profile.submittedAt.toISOString() : null,
       steps,
+      canSubmit: canOrganizerEdit(profile.onboardingStatus) && goLiveMissing.length === 0,
+      goLiveMissing,
+      payoutReady: this.payoutReady(profile),
+      canEditBank: this.canEditBank(profile),
     };
   }
 
@@ -435,13 +558,17 @@ export class OrganizerOnboardingService {
     };
   }
 
-  /** Submits the full profile for verification once every required field is present. */
+  /**
+   * Submits the profile for verification once every go-live field is present.
+   * Bank details are not among them: they are asked for before the first
+   * payout, and an organizer should not wait on them to be reviewed.
+   */
   async completeOnboarding(userId: string): Promise<OrganizerProfileView> {
-    // Gate-checked like every other write: a pending or rejected organizer gets
-    // a clear 403 rather than a confusing "please complete X" list.
+    // Gate-checked like every other write: a submitted or rejected organizer
+    // gets a clear 403 rather than a confusing "please complete X" list.
     const { profile, user } = await this.loadForEdit(userId);
 
-    const { missing } = this.overall(profile);
+    const { missing } = this.goLive(profile);
     if (missing.length > 0) {
       throw new BadRequestException(`Please complete: ${missing.map((m) => m.label).join(', ')}`);
     }
@@ -527,6 +654,12 @@ export class OrganizerOnboardingService {
     return { percent, missing: missing.map((m) => m.label) };
   }
 
+  /** What still stands between this profile and going live (bank details excluded). */
+  goLiveFor(profile: OrganizerProfileDocument): { percent: number; missing: string[] } {
+    const { percent, missing } = this.goLive(profile);
+    return { percent, missing: missing.map((m) => m.label) };
+  }
+
   /** Recomputes and stores completion after an admin edit. */
   recomputeCompletion(profile: OrganizerProfileDocument): number {
     const { percent } = this.overall(profile);
@@ -588,7 +721,7 @@ export class OrganizerOnboardingService {
     if (
       !wasComplete &&
       percent === 100 &&
-      profile.onboardingStatus !== OnboardingStatus.SUBMITTED
+      canOrganizerEdit(profile.onboardingStatus)
     ) {
       await this.notify(
         userId,
@@ -627,9 +760,7 @@ export class OrganizerOnboardingService {
     }
   }
 
-  private stepStatus(
-    profile: OrganizerProfileDocument,
-  ): Array<{ id: string; title: string; complete: boolean; missingFields: string[] }> {
+  private stepStatus(profile: OrganizerProfileDocument): StepStatus[] {
     return STEPS.map((step) => {
       const missingFields = step.required
         .filter((f) => !this.isFilled(profile, f))
@@ -639,8 +770,59 @@ export class OrganizerOnboardingService {
         title: step.title,
         complete: missingFields.length === 0,
         missingFields,
+        requiredForGoLive: step.goLive,
       };
     });
+  }
+
+  private goLive(profile: OrganizerProfileDocument): {
+    percent: number;
+    missing: Array<ReqField & { stepId: string }>;
+  } {
+    const missing = GO_LIVE_REQUIRED.filter((f) => !this.isFilled(profile, f));
+    const filled = GO_LIVE_REQUIRED.length - missing.length;
+    return { percent: Math.round((filled / GO_LIVE_REQUIRED.length) * 100), missing };
+  }
+
+  private payoutReady(profile: OrganizerProfileDocument): boolean {
+    return PAYOUT_REQUIRED.every((f) => this.isFilled(profile, f));
+  }
+
+  /** Bank details are editable while onboarding, and addable — not changeable — after. */
+  private canEditBank(profile: OrganizerProfileDocument): boolean {
+    if (canOrganizerEdit(profile.onboardingStatus)) return true;
+    const afterSubmit =
+      profile.onboardingStatus === OnboardingStatus.SUBMITTED ||
+      profile.onboardingStatus === OnboardingStatus.APPROVED;
+    return afterSubmit && !this.payoutReady(profile);
+  }
+
+  /**
+   * Gives a brand-new account the organizer's name and city. Only fills what
+   * is empty: the account may be a customer's with their own name already,
+   * and sign-up is not the moment to overwrite it. Submission
+   * (`syncUserFromProfile`) still copies the verified details across.
+   */
+  private async fillMissingUserBasics(
+    user: UserDocument,
+    profile: OrganizerProfileDocument,
+  ): Promise<void> {
+    const fullName = `${profile.firstName ?? ''} ${profile.lastName ?? ''}`.trim();
+    let changed = false;
+    if (!user.name?.trim() && fullName) {
+      user.name = fullName;
+      changed = true;
+    }
+    if (!user.city?.trim() && profile.city) {
+      user.city = profile.city;
+      changed = true;
+    }
+    if (!changed) return;
+    try {
+      await user.save();
+    } catch (err) {
+      this.logger.warn(`User basics from organizer sign-up failed: ${String(err)}`);
+    }
   }
 
   private overall(profile: OrganizerProfileDocument): {
@@ -686,6 +868,8 @@ export class OrganizerOnboardingService {
       profileCompletion: profile.profileCompletion,
       submittedAt: profile.submittedAt ? profile.submittedAt.toISOString() : null,
       canEdit: canOrganizerEdit(profile.onboardingStatus),
+      canEditBank: this.canEditBank(profile),
+      payoutReady: this.payoutReady(profile),
       reviewNote: this.outstandingNote(profile),
       firstName: profile.firstName,
       lastName: profile.lastName,

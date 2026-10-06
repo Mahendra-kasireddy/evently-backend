@@ -1,4 +1,11 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as bcrypt from 'bcryptjs';
@@ -17,7 +24,22 @@ export class UserService {
   constructor(
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     @InjectModel(Package.name) private readonly packageModel: Model<PackageDocument>,
+    private readonly config: ConfigService,
   ) {}
+
+  /**
+   * A self-set profile photo must be a file Evently stored. A local-driver
+   * path is ours by construction; a full URL must sit on the configured
+   * upload host. Anything else would let an account point every screen that
+   * shows its avatar at a server of its choosing.
+   */
+  assertOwnUpload(url: string | undefined): void {
+    if (!url || url.startsWith('/api/upload/file/')) return;
+    const base = (this.config.get<string>('upload.publicBaseUrl') ?? '').replace(/\/+$/, '');
+    if (!base || !url.startsWith(`${base}/`)) {
+      throw new BadRequestException('Upload your photo through Evently');
+    }
+  }
 
   async create(dto: CreateUserDto): Promise<UserDocument> {
     const existing = await this.userModel.exists({ email: dto.email.toLowerCase() });
@@ -188,13 +210,14 @@ export class UserService {
   /** Compact profile for the home header/greeting: name, initials, location. */
   async getProfileSummary(
     id: string,
-  ): Promise<{ id: string; name: string; initials: string; location: string }> {
+  ): Promise<{ id: string; name: string; initials: string; location: string; photoUrl: string }> {
     const user = await this.findById(id);
     return {
       id: user._id.toString(),
       name: user.name || 'there',
       initials: this.initialsOf(user.name),
       location: user.city || '',
+      photoUrl: user.photoUrl || '',
     };
   }
 
@@ -217,13 +240,33 @@ export class UserService {
    * updated user. Used to upgrade an existing customer to also be an organizer
    * without creating a duplicate account.
    */
-  async addRole(id: string, role: Role): Promise<UserDocument> {
+  async addRole(
+    id: string,
+    role: Role,
+    opts: { makeDefault?: boolean } = {},
+  ): Promise<UserDocument> {
     this.assertObjectId(id);
-    const user = await this.userModel
-      .findByIdAndUpdate(id, { $addToSet: { roles: role } }, { new: true })
-      .exec();
+    const update: Record<string, unknown> = { $addToSet: { roles: role } };
+    if (opts.makeDefault) update.$set = { defaultRole: role };
+    const user = await this.userModel.findByIdAndUpdate(id, update, { new: true }).exec();
     if (!user) throw new NotFoundException('User not found');
     return user;
+  }
+
+  /**
+   * Chooses which side of the product the account opens on. Only a role the
+   * account already holds — a customer cannot make themselves an organizer
+   * by naming it here; that is what registration is for.
+   */
+  async setDefaultRole(id: string, role: Role): Promise<{ defaultRole: Role }> {
+    this.assertObjectId(id);
+    const user = await this.userModel
+      .findOneAndUpdate({ _id: id, roles: role }, { $set: { defaultRole: role } }, { new: true })
+      .exec();
+    if (!user) {
+      throw new ForbiddenException('This account does not hold that role');
+    }
+    return { defaultRole: role };
   }
 
   // ----- refresh-token lifecycle (used by AuthService) -----

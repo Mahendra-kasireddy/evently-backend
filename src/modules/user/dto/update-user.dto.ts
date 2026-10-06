@@ -1,5 +1,5 @@
 import { PartialType, OmitType } from '@nestjs/mapped-types';
-import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsEnum, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import { CreateUserDto } from './create-user.dto';
 import { UserStatus } from '../schemas/user.schema';
 
@@ -9,6 +9,14 @@ import { UserStatus } from '../schemas/user.schema';
  * and it is what "organizers near you" matches on.
  */
 const CITY_MAX = 120;
+
+/**
+ * The shape of a profile photo URL: the local driver's `/api/upload/file/<key>`
+ * path (no `..`), or an https URL. Shape only — that an https URL is on
+ * Evently's own upload host is checked in `UserService.assertOwnUpload`,
+ * which knows the configured host.
+ */
+const PROFILE_PHOTO_URL = /^(?!.*\.\.)(\/api\/upload\/file\/[\w./-]+|https:\/\/\S+)$/;
 
 /**
  * What a user may change about their own account.
@@ -31,6 +39,12 @@ export class UpdateProfileDto extends PartialType(
   @IsString()
   @MaxLength(CITY_MAX)
   city?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  @Matches(PROFILE_PHOTO_URL, { message: 'Upload your photo through Evently' })
+  photoUrl?: string;
 }
 
 /**
