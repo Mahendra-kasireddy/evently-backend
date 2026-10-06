@@ -50,6 +50,16 @@ export class UploadService implements OnModuleInit {
       this.local = new LocalStorageDriver(dir, publicBaseUrl);
       this.driver = this.local;
       this.logger.log(`Upload driver: local (${dir})`);
+      if (process.env.NODE_ENV === 'production') {
+        // Not fatal — uploads still work — but on a container host (Render,
+        // Fly, Kubernetes) this disk is wiped on every deploy and restart, and
+        // every uploaded photo and document goes with it.
+        this.logger.warn(
+          'UPLOAD_DRIVER is "local" in production: uploaded files are stored on the container disk ' +
+            'and will be lost on the next deploy or restart. Set UPLOAD_DRIVER=s3 with an S3-compatible ' +
+            'bucket (S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_ENDPOINT, UPLOAD_PUBLIC_BASE_URL).',
+        );
+      }
     }
   }
 
