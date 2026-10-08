@@ -124,10 +124,10 @@ export class UploadService implements OnModuleInit {
     return this.driver.remove(key);
   }
 
-  /** Reads a locally-stored file (dev serving route). Only valid for the local driver. */
-  readLocal(key: string): Promise<Buffer> {
+  /** A locally-stored file's absolute path, traversal-checked. Only valid for the local driver. */
+  localPath(key: string): string {
     if (!this.local) throw new BadRequestException('Local file serving is disabled');
-    return this.local.read(key);
+    return this.local.pathFor(key);
   }
 
   get isLocal(): boolean {

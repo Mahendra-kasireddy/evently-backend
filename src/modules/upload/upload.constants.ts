@@ -77,7 +77,8 @@ export const UPLOAD_RULES: Record<UploadPurpose, UploadRule> = {
     image: { minWidth: 200, minHeight: 200, maxWidth: 6000, maxHeight: 6000 },
   },
   [UploadPurpose.VIDEO]: {
-    maxBytes: 100 * MB,
+    // Sized for a five-minute HD invitation reel (see HERO_VIDEO_MAX_SECONDS).
+    maxBytes: 250 * MB,
     mimeTypes: VIDEO_MIMES,
     extensions: VIDEO_EXTS,
   },

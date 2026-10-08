@@ -8,7 +8,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
 import { randomBytes } from 'crypto';
-import { Invitation, InvitationDocument, InvitationStatus } from '../schemas/invitation.schema';
+import { Invitation, InvitationDocument } from '../schemas/invitation.schema';
 import {
   GuestGroup,
   InvitationGuest,
@@ -33,6 +33,7 @@ import { ShareInvitationDto } from '../dto/share-invitation.dto';
 import { PHONE_REJECTION_MESSAGE, displayPhone, parseGuestPhone } from './guest-phone';
 import { guestAppUrl, guestShareUrl, shareMessage } from './share-links';
 import { WhatsAppProvider } from './whatsapp.provider';
+import { guestCopy, isLiveForGuests } from '../published';
 
 /** A guest as the customer's share dialog sees it. */
 export interface GuestSummary {
@@ -89,10 +90,11 @@ export class InvitationGuestService {
     }
     const invitation = await this.invitationModel.findOne({ booking: booking._id }).exec();
     if (!invitation) throw new NotFoundException('No invitation for this event yet');
-    if (invitation.status !== InvitationStatus.APPROVED) {
+    if (!isLiveForGuests(invitation)) {
       throw new BadRequestException('Approve the invitation before sharing it with guests');
     }
-    return { booking, invitation };
+    // What guests get is the approved version, not the organizer's working copy.
+    return { booking, invitation: guestCopy(this.invitationModel, invitation) };
   }
 
   async listGuests(userId: string, bookingId: string): Promise<GuestSummary[]> {
@@ -453,10 +455,12 @@ export class InvitationGuestService {
     if (!guest) throw new NotFoundException('This invitation link is not valid');
 
     const invitation = await this.invitationModel.findById(guest.invitation).exec();
-    if (!invitation || invitation.status !== InvitationStatus.APPROVED) {
+    if (!invitation || !isLiveForGuests(invitation)) {
       throw new NotFoundException('This invitation is not available');
     }
-    return { guest, invitation };
+    // The last approved version — an update the customer has not approved yet
+    // never reaches a guest.
+    return { guest, invitation: guestCopy(this.invitationModel, invitation) };
   }
 
   async viewByToken(token: string): Promise<Record<string, unknown>> {
@@ -525,8 +529,9 @@ export class InvitationGuestService {
   ): Promise<{ eventName: string; hosts: string; guestName: string; appUrl: string } | null> {
     const guest = await this.guestModel.findOne({ token }).exec();
     if (!guest) return null;
-    const invitation = await this.invitationModel.findById(guest.invitation).exec();
-    if (!invitation || invitation.status !== InvitationStatus.APPROVED) return null;
+    const found = await this.invitationModel.findById(guest.invitation).exec();
+    if (!found || !isLiveForGuests(found)) return null;
+    const invitation = guestCopy(this.invitationModel, found);
     const booking = await this.bookingModel.findById(guest.booking).exec();
     if (!booking) return null;
 

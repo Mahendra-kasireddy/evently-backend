@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
   ServiceUnavailableException,
   forwardRef,
 } from '@nestjs/common';
@@ -56,9 +57,39 @@ export interface PaymentOrderView {
 const CURRENCY = 'INR' as const;
 
 @Injectable()
-export class PaymentService {
+export class PaymentService implements OnModuleInit {
   private readonly logger = new Logger(PaymentService.name);
   private client: Razorpay | null = null;
+
+  /**
+   * Replaces a stale `razorpayOrderId` index left by an older build.
+   *
+   * The schema declares a PARTIAL unique index (cash orders carry an empty
+   * gateway id), but databases created before cash payments still hold the
+   * original plain unique index — and Mongoose never replaces an index that
+   * exists under the same name with different options. With the old one in
+   * place, the first cash order takes the empty id and every cash booking
+   * after it fails with a duplicate-key error. Checked once at startup, so
+   * each environment repairs itself on its next deploy.
+   */
+  async onModuleInit(): Promise<void> {
+    try {
+      const indexes = await this.orderModel.collection.indexes();
+      const stale = indexes.find(
+        (ix) => ix.key?.razorpayOrderId === 1 && ix.unique && !ix.partialFilterExpression,
+      );
+      if (!stale?.name) return;
+      await this.orderModel.collection.dropIndex(stale.name);
+      await this.orderModel.syncIndexes();
+      this.logger.warn(
+        `Replaced stale unique index "${stale.name}" on payment_orders with the partial one, ` +
+          'so cash orders (no gateway id) no longer collide.',
+      );
+    } catch (error) {
+      // Never stop the app booting over this; cash bookings report it if it persists.
+      this.logger.error(`Could not repair the payment_orders index: ${String(error)}`);
+    }
+  }
 
   constructor(
     @InjectModel(PaymentOrder.name)

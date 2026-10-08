@@ -11,7 +11,6 @@ import {
 } from '@nestjs/common';
 import { InvitationService } from './invitation.service';
 import { UpdateInvitationDto } from './dto/update-invitation.dto';
-import { PersonalizeBlockDto } from './dto/personalize-block.dto';
 import { RequestChangeDto } from './dto/request-change.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -74,32 +73,13 @@ export class InvitationController {
     return this.invitationService.approve(userId, bookingId);
   }
 
-  /** Edit one of the sections the customer owns. 403 on anyone else's. */
-  @UseGuards(RolesGuard)
-  @Roles(Role.CUSTOMER, Role.ADMIN)
-  /** Sign off one section. The guest link goes live on the last one. */
-  @Post('mine/:bookingId/blocks/:blockKey/approve')
-  approveBlock(
-    @CurrentUser('userId') userId: string,
-    @Param('bookingId') bookingId: string,
-    @Param('blockKey') blockKey: string,
-  ) {
-    return this.invitationService.approveBlock(userId, bookingId, blockKey);
-  }
+  /*
+   * No per-section approve or edit. The invitation is reviewed and approved
+   * as one piece: the customer approves the whole version they were sent, or
+   * asks for changes to it, below.
+   */
 
-  @UseGuards(RolesGuard)
-  @Roles(Role.CUSTOMER, Role.ADMIN)
-  @Patch('mine/:bookingId/blocks/:blockKey')
-  personalize(
-    @CurrentUser('userId') userId: string,
-    @Param('bookingId') bookingId: string,
-    @Param('blockKey') blockKey: string,
-    @Body() dto: PersonalizeBlockDto,
-  ) {
-    return this.invitationService.personalizeBlock(userId, bookingId, blockKey, dto);
-  }
-
-  /** Ask the organizer to change a section they own. */
+  /** Ask the organizer for changes to the invitation. */
   @UseGuards(RolesGuard)
   @Roles(Role.CUSTOMER, Role.ADMIN)
   @HttpCode(HttpStatus.OK)

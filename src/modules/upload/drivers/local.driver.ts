@@ -42,6 +42,15 @@ export class LocalStorageDriver implements StorageDriver {
     return fs.readFile(this.safeJoin(key));
   }
 
+  /**
+   * The file's absolute path, for streaming it straight off disk (which is
+   * what lets the serving route answer byte-range requests). Throws if the key
+   * escapes root.
+   */
+  pathFor(key: string): string {
+    return this.safeJoin(key);
+  }
+
   /** Prevents path traversal — the resolved path must stay under `root`. */
   private safeJoin(key: string): string {
     const dest = resolve(this.root, key);

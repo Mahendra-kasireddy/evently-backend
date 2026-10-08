@@ -8,7 +8,6 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import {
-  BlockOwner,
   Invitation,
   InvitationDocument,
   InvitationStatus,
@@ -23,7 +22,6 @@ import { NotificationType } from '../notification/schemas/notification.schema';
 import { InvitationSubEventDto, UpdateInvitationDto } from './dto/update-invitation.dto';
 import { storyView } from './story.view';
 import { countdownTargetOf } from './countdown';
-import { PersonalizeBlockDto } from './dto/personalize-block.dto';
 import { RequestChangeDto } from './dto/request-change.dto';
 import {
   CARD_PALETTE,
@@ -42,6 +40,7 @@ import {
   RSVP_LEAD_DAYS,
   WELCOME_MESSAGE_MAX,
 } from './invitation-defaults';
+import { contentOf, isLiveForGuests, withContent } from './published';
 
 const pad = (n: number): string => String(n).padStart(2, '0');
 
@@ -123,9 +122,13 @@ export class InvitationService {
   }
 
   /**
-   * Partial update. Editing an already-approved invitation returns it to
-   * draft: the customer approved specific wording, so changing it has to be
-   * re-sent and re-approved before the guest link goes live again.
+   * Partial update of the organizer's working copy.
+   *
+   * Nothing the customer or the guests see changes here. The customer reviews
+   * what was last SENT and guests see what was last APPROVED; an edit only
+   * marks the invitation as having unsent changes, so the organizer can send
+   * the update when it is ready. An approved invitation stays live for guests
+   * — on its approved version — the whole time.
    */
   async updateForOrganizer(
     userId: string,
@@ -238,10 +241,7 @@ export class InvitationService {
         throw new BadRequestException('That event is not part of this invitation');
       }
     }
-    if (invitation.status === InvitationStatus.APPROVED) {
-      invitation.status = InvitationStatus.DRAFT;
-      invitation.approvedAt = undefined;
-    }
+    invitation.hasUnsentChanges = true;
 
     await invitation.save();
     return this.view(invitation, booking);
@@ -252,15 +252,37 @@ export class InvitationService {
     const booking = await this.organizerBooking(userId, bookingId);
     const invitation = await this.findOrCreate(booking);
 
+    const isUpdate = !!invitation.sentContent || invitation.status !== InvitationStatus.DRAFT;
+    // The whole invitation, as it stands now, is the version under review.
+    invitation.sentContent = contentOf(invitation);
+    invitation.markModified('sentContent');
+    invitation.hasUnsentChanges = false;
     invitation.status = InvitationStatus.SENT;
     invitation.sentAt = new Date();
     invitation.approvedAt = undefined;
+    /*
+     * Sending is the organizer's answer to whatever the customer asked for —
+     * the asks are closed by it, not one by one. The customer reviews the
+     * result and asks again if it still is not right.
+     */
+    let answered = 0;
+    invitation.changeRequests.forEach((r) => {
+      if (!r.resolved) {
+        r.resolved = true;
+        answered += 1;
+      }
+    });
+    if (answered > 0) invitation.markModified('changeRequests');
     await invitation.save();
 
     await this.notify(
       booking.customer,
-      'Your guest invitation is ready to review',
-      `${booking.title} — approve it to make the guest link live.`,
+      isUpdate
+        ? 'Your organizer updated your invitation'
+        : 'Your guest invitation is ready to review',
+      isUpdate
+        ? `${booking.title} — review the update and approve it. Guests keep seeing the approved version until you do.`
+        : `${booking.title} — approve it to make the guest link live.`,
       customerInvitationLink(booking._id.toString()),
     );
     return this.view(invitation, booking);
@@ -342,47 +364,21 @@ export class InvitationService {
   async getForCustomer(userId: string, bookingId: string): Promise<Record<string, unknown>> {
     const booking = await this.customerBooking(userId, bookingId);
     const invitation = await this.sharedInvitation(booking);
-    return this.view(invitation, booking);
+    return this.customerView(invitation, booking);
   }
 
   /**
-   * One section signed off.
-   *
-   * The guest link goes live only when the last visible section is approved —
-   * a hidden block is not shown to guests, so waiting on it would block the
-   * invitation on something nobody will read.
+   * What the customer sees: the version last SENT to them, never the
+   * organizer's unsent working copy.
    */
-  async approveBlock(
-    userId: string,
-    bookingId: string,
-    blockKey: string,
-  ): Promise<Record<string, unknown>> {
-    const booking = await this.customerBooking(userId, bookingId);
-    const invitation = await this.sharedInvitation(booking);
-
-    const block = invitation.blocks.find((b) => b.key === blockKey);
-    if (!block) throw new NotFoundException('That section is not on this invitation');
-
-    block.approved = true;
-
-    const outstanding = invitation.blocks.filter((b) => !b.hidden && !b.approved);
-    if (outstanding.length === 0 && invitation.status !== InvitationStatus.APPROVED) {
-      invitation.status = InvitationStatus.APPROVED;
-      invitation.approvedAt = new Date();
-      await invitation.save();
-
-      const organizerUserId = await this.organizerUserId(invitation.organizer);
-      await this.notify(
-        organizerUserId,
-        'Invitation approved',
-        `${booking.title} — the guest link is live.`,
-        `/organizer/invitation/${booking._id.toString()}`,
-      );
-      return this.view(invitation, booking);
-    }
-
-    await invitation.save();
-    return this.view(invitation, booking);
+  private customerView(invitation: InvitationDocument, booking: BookingDocument) {
+    const view = this.view(
+      withContent(this.invitationModel, invitation, invitation.sentContent),
+      booking,
+    );
+    // The organizer's drafting is not the customer's business.
+    delete view.hasUnsentChanges;
+    return view;
   }
 
   /** Customer sign-off — this, and only this, makes the guest link live. */
@@ -390,10 +386,17 @@ export class InvitationService {
     const booking = await this.customerBooking(userId, bookingId);
     const invitation = await this.sharedInvitation(booking);
 
-    // Approving the invitation is approving every section of it.
+    /*
+     * Approving is approving the whole version they were sent — every section
+     * of it at once. That version becomes what guests see; the organizer's
+     * working copy, if they have moved on since, is untouched.
+     */
     invitation.blocks.forEach((b) => {
       b.approved = true;
     });
+    invitation.publishedContent = invitation.sentContent ?? contentOf(invitation);
+    invitation.markModified('publishedContent');
+    invitation.publishedAt = new Date();
     invitation.status = InvitationStatus.APPROVED;
     invitation.approvedAt = new Date();
     await invitation.save();
@@ -405,42 +408,7 @@ export class InvitationService {
       `${booking.title} — the guest link is live.`,
       `/organizer/invitation/${booking._id.toString()}`,
     );
-    return this.view(invitation, booking);
-  }
-
-  /**
-   * The customer editing one of their own sections.
-   *
-   * Ownership is checked per block, not per invitation: the customer writes the
-   * personal sections (names, story, photos) and the organizer keeps the
-   * logistics ones, so editing someone else's section is a 403 rather than a
-   * silently ignored field. Their own edit does not reset approval — they are
-   * the approver, so there is nothing to re-approve.
-   */
-  async personalizeBlock(
-    userId: string,
-    bookingId: string,
-    blockKey: string,
-    dto: PersonalizeBlockDto,
-  ): Promise<Record<string, unknown>> {
-    const booking = await this.customerBooking(userId, bookingId);
-    const invitation = await this.sharedInvitation(booking);
-
-    const block = invitation.blocks.find((b) => b.key === blockKey);
-    if (!block) throw new NotFoundException('That section is not part of this invitation');
-    if (block.owner !== BlockOwner.CUSTOMER) {
-      throw new ForbiddenException(
-        'Your organizer looks after this section — ask them for a change instead',
-      );
-    }
-
-    if (dto.heading !== undefined) block.heading = dto.heading;
-    if (dto.body !== undefined) block.body = dto.body;
-    if (dto.hidden !== undefined) block.hidden = dto.hidden;
-    invitation.markModified('blocks');
-    await invitation.save();
-
-    return this.view(invitation, booking);
+    return this.customerView(invitation, booking);
   }
 
   /**
@@ -480,7 +448,7 @@ export class InvitationService {
       `${booking.title} — ${dto.note}`,
       `/organizer/invitation/${booking._id.toString()}`,
     );
-    return this.view(invitation, booking);
+    return this.customerView(invitation, booking);
   }
 
   // ---------------------------------------------------------------------------
@@ -586,6 +554,11 @@ export class InvitationService {
       status: invitation.status,
       sentAt: invitation.sentAt ?? null,
       approvedAt: invitation.approvedAt ?? null,
+      /** Guests can open it — it has been approved at least once. */
+      isLive: isLiveForGuests(invitation),
+      publishedAt: invitation.publishedAt ?? invitation.approvedAt ?? null,
+      /** Organizer only: edits saved since the last send. */
+      hasUnsentChanges: invitation.hasUnsentChanges ?? false,
       details: invitation.details,
       /*
        * `approved` is reported true for every block of an already-approved

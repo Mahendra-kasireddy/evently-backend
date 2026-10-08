@@ -511,8 +511,42 @@ export class Invitation {
   @Prop({ type: Date })
   approvedAt?: Date;
 
+  /*
+   * The invitation is reviewed and approved as ONE piece, in versions.
+   *
+   * `sentContent` is the content as it stood when the organizer last sent it:
+   * what the customer reviews. `publishedContent` is the content the customer
+   * last approved: what guests see. The organizer's working copy (the fields
+   * above) can move on without either changing — guests keep the approved
+   * version while an update is drafted, sent and approved.
+   *
+   * "Content" is the four editable parts: details, blocks, sub-events and the
+   * story. Live-stream fields are operational, not content, and are always
+   * read from the working copy (see InvitationService.forGuests).
+   */
+  @Prop({ type: Object, default: null })
+  sentContent?: InvitationContent | null;
+
+  @Prop({ type: Object, default: null })
+  publishedContent?: InvitationContent | null;
+
+  @Prop({ type: Date })
+  publishedAt?: Date;
+
+  /** The organizer has saved edits since they last sent it. */
+  @Prop({ default: false })
+  hasUnsentChanges: boolean;
+
   createdAt?: Date;
   updatedAt?: Date;
+}
+
+/** The editable parts of an invitation, as one versioned snapshot. */
+export interface InvitationContent {
+  details: InvitationDetails;
+  blocks: InvitationBlock[];
+  subEvents: InvitationSubEvent[];
+  storyCards: InvitationStoryCard[];
 }
 
 export const InvitationSchema = SchemaFactory.createForClass(Invitation);

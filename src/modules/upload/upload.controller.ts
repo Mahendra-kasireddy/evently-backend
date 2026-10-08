@@ -20,7 +20,9 @@ import { UploadFileDto } from './dto/upload-file.dto';
 import { UploadedFileMeta } from './interfaces/storage-driver.interface';
 import { Public } from '../../common/decorators/public.decorator';
 
-const MAX_UPLOAD_BYTES = 105 * 1024 * 1024; // hard ceiling; per-purpose limit enforced in the service
+// Hard ceiling, a little over the largest per-purpose limit (a 250MB video);
+// each purpose's own limit is enforced in the service.
+const MAX_UPLOAD_BYTES = 255 * 1024 * 1024;
 
 const CONTENT_TYPES: Record<string, string> = {
   '.jpg': 'image/jpeg',
@@ -63,17 +65,32 @@ export class UploadController {
    */
   @Public()
   @Get('file/*')
-  async serve(@Param('0') key: string, @Res() res: Response): Promise<void> {
+  serve(@Param('0') key: string, @Res() res: Response): void {
     if (!this.uploadService.isLocal) throw new NotFoundException();
-    let buffer: Buffer;
+    let path: string;
     try {
-      buffer = await this.uploadService.readLocal(key);
+      path = this.uploadService.localPath(key);
     } catch {
       throw new NotFoundException('File not found');
     }
     const type = CONTENT_TYPES[extname(key).toLowerCase()] ?? 'application/octet-stream';
-    res.setHeader('Content-Type', type);
-    res.setHeader('Cache-Control', 'public, max-age=86400');
-    res.send(buffer);
+    /*
+     * Streamed from disk with byte ranges, not read into memory and sent whole.
+     * iOS will not play a video from a server that cannot answer a Range
+     * request, and reading a 250MB reel into memory on every view is how a
+     * small instance runs out of it.
+     */
+    res.sendFile(
+      path,
+      {
+        acceptRanges: true,
+        maxAge: '1d',
+        headers: { 'Content-Type': type },
+      },
+      (err?: Error) => {
+        if (!err || res.headersSent) return;
+        res.status(404).json({ statusCode: 404, message: 'File not found' });
+      },
+    );
   }
 }

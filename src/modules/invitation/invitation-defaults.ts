@@ -209,12 +209,13 @@ export enum HeroMediaType {
 /**
  * How long an uploaded invitation video may run.
  *
- * Two minutes rather than the thirty seconds a decorative cover loop needed:
- * the organizer now uploads the invitation itself — a designed save-the-date
- * reel with names, dates and venue in it — and thirty seconds would refuse
- * most of them at the door.
+ * Five minutes. The organizer uploads the invitation itself — a designed
+ * save-the-date reel with names, dates and venue in it — and a reel with a
+ * full song or the couple's story runs past two minutes often enough that
+ * the old cap refused real invitations at the door. Keep in step with
+ * VIDEO_MAX_SECONDS in the web editor and the `video` upload size rule.
  */
-export const HERO_VIDEO_MAX_SECONDS = 120;
+export const HERO_VIDEO_MAX_SECONDS = 300;
 
 /**
  * The welcome message's cap, in characters.

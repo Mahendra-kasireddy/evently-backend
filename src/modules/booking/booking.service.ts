@@ -322,6 +322,30 @@ export class BookingService {
     }
   }
 
+  /**
+   * The checklist, with "Advance paid" told from the money rather than the
+   * status.
+   *
+   * The stored steps are ticked by status order, which assumed the advance was
+   * taken before the organizer heard of the booking. A cash booking enters the
+   * same status with nothing paid, so the list ticked "Advance paid" over a
+   * payment panel saying nothing had been — the customer was told two
+   * opposite things on one screen. Paid is what the record says was paid.
+   */
+  private stepsWithPayment(b: BookingDocument): { label: string; done: boolean }[] {
+    const advancePaid =
+      (b.paymentStatus ?? PaymentStatus.UNPAID) !== PaymentStatus.UNPAID || (b.amountPaid ?? 0) > 0;
+    return (b.steps ?? []).map((step) => {
+      const plain = { label: step.label, done: step.done };
+      if (step.label !== BOOKING_STEPS[1]) return plain;
+      if (advancePaid) return { ...plain, done: true };
+      return {
+        label: b.advanceMethod === AdvanceMethod.CASH ? 'Advance due in cash' : step.label,
+        done: false,
+      };
+    });
+  }
+
   private detailView(b: BookingDocument): Record<string, unknown> {
     const org = b.organizer as unknown as Record<string, unknown> | undefined;
     const organizer =
@@ -366,6 +390,8 @@ export class BookingService {
       couponDiscount: b.couponDiscount ?? 0,
       advanceAmount,
       advancePercentage,
+      /** How the advance is being settled — 'cash' is owed to the organizer, not taken here. */
+      advanceMethod: b.advanceMethod ?? AdvanceMethod.ONLINE,
       balanceAmount: Math.max(0, b.amount - advanceAmount),
       paymentStatus: b.paymentStatus ?? PaymentStatus.UNPAID,
       amountPaid: b.amountPaid ?? 0,
@@ -373,7 +399,7 @@ export class BookingService {
       organizerRespondBy: b.organizerRespondBy ?? null,
       declineReason: b.declineReason ?? '',
       progress: b.progress,
-      steps: b.steps,
+      steps: this.stepsWithPayment(b),
       tasks: b.tasks.map((t) => ({
         id: (t as unknown as { _id: Types.ObjectId })._id.toString(),
         title: t.title,
