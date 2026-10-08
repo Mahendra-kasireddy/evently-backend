@@ -17,12 +17,9 @@ import { SmsProvider } from './providers/sms.provider';
 export interface IssuedOtp {
   requestId: string;
   sentTo: string;
-  /** Present only in OTP_MODE=test, so the flow is testable without an SMS. */
+  /** Present only in non-production (stub) mode, so the flow is testable. */
   devCode?: string;
 }
-
-/** The code OTP_MODE=test accepts for every number. */
-export const TEST_OTP = '123456';
 
 @Injectable()
 export class OtpService {
@@ -31,10 +28,6 @@ export class OtpService {
     private readonly config: ConfigService,
     private readonly sms: SmsProvider,
   ) {}
-
-  private isTestMode(): boolean {
-    return this.config.get<string>('otp.mode') !== 'twilio';
-  }
 
   /** Generates, stores (hashed), and delivers an OTP for a phone number. */
   async issue(phone: string): Promise<IssuedOtp> {
@@ -56,10 +49,11 @@ export class OtpService {
 
     await this.sms.sendOtp(phone, code);
 
+    const isProd = this.config.get<string>('env') === 'production';
     return {
       requestId: doc._id.toString(),
       sentTo: this.mask(phone),
-      devCode: this.isTestMode() ? code : undefined,
+      devCode: isProd ? undefined : code,
     };
   }
 
@@ -84,10 +78,10 @@ export class OtpService {
       );
     }
 
-    // OTP_MODE=test: a fixed code, so an APK can be tested without SMS.
-    // Decided by the server's own setting only — never by anything the
-    // client sends — so no request can switch it on.
-    const isMasterCode = this.isTestMode() && code === TEST_OTP;
+    // Non-production convenience: a fixed master code so manual/browser
+    // testing doesn't depend on reading the real per-request devCode.
+    const isProd = this.config.get<string>('env') === 'production';
+    const isMasterCode = !isProd && code === '123456';
 
     const matches = isMasterCode || (await bcrypt.compare(code, otp.codeHash));
     if (!matches) {

@@ -36,7 +36,8 @@ export default () => ({
   },
 
   otp: {
-    delivery: process.env.OTP_DELIVERY ?? 'stub',
+    /** 'test' (no SMS, 123456 accepted) or 'twilio' (real SMS). */
+    mode: process.env.OTP_MODE === 'twilio' ? 'twilio' : 'test',
     length: parseInt(process.env.OTP_LENGTH ?? '6', 10),
     ttlSeconds: parseInt(process.env.OTP_TTL_SECONDS ?? '300', 10),
     maxAttempts: parseInt(process.env.OTP_MAX_ATTEMPTS ?? '5', 10),

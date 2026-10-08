@@ -1,34 +1,83 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 /**
- * SMS delivery seam. Today it supports a 'stub' mode that logs the code
- * (so the OTP flow is fully testable without a paid SMS account).
+ * Sends the login code — or, in OTP_MODE=test, deliberately does not.
  *
- * To go live: set OTP_DELIVERY=sms and implement sendViaProvider() for your
- * provider (MSG91 / 2Factor / Twilio) using OTP_SMS_API_KEY.
+ * `test`   → nothing is sent; the code is logged and 123456 is accepted
+ *            (see OtpService). For local work and APK testing.
+ * `twilio` → a real SMS through Twilio's Messages API, using TWILIO_ACCOUNT_SID,
+ *            TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER (required at boot in
+ *            this mode — see env.validation).
  */
 @Injectable()
-export class SmsProvider {
+export class SmsProvider implements OnModuleInit {
   private readonly logger = new Logger(SmsProvider.name);
 
   constructor(private readonly config: ConfigService) {}
 
-  async sendOtp(phone: string, code: string): Promise<void> {
-    const mode = this.config.get<string>('otp.delivery');
-    if (mode === 'sms') {
-      return this.sendViaProvider(phone, code);
+  onModuleInit(): void {
+    const mode = this.config.get<string>('otp.mode');
+    if (mode === 'twilio') {
+      this.logger.log('OTP_MODE=twilio — login codes are sent by SMS.');
+      return;
     }
-    // stub mode
-    this.logger.warn(`[OTP][stub] code for ${phone} is ${code} (delivery disabled)`);
+    // Loud on purpose: test mode on a live server means 123456 opens any account.
+    const say = this.config.get<string>('env') === 'production' ? 'warn' : 'log';
+    this.logger[say]('OTP_MODE=test — no SMS is sent and 123456 logs in to any number.');
   }
 
-  private async sendViaProvider(phone: string, code: string): Promise<void> {
-    // const apiKey = this.config.get<string>('otp.smsApiKey');
-    // TODO: real HTTP call to the SMS provider once the provider is confirmed.
-    this.logger.error(
-      `OTP_DELIVERY=sms but no provider is wired yet. Would have sent ${code} to ${phone}.`,
-    );
-    throw new Error('SMS provider not configured');
+  async sendOtp(phone: string, code: string): Promise<void> {
+    if (this.config.get<string>('otp.mode') === 'twilio') {
+      return this.sendViaTwilio(phone, code);
+    }
+    this.logger.warn(`[OTP][test] code for ${phone} is ${code} (no SMS sent)`);
+  }
+
+  /** "+919876543210" from the 10-digit number the app sends. */
+  private toE164(phone: string): string {
+    if (phone.startsWith('+')) return phone;
+    const dial = this.config.get<string>('otp.defaultDialCode', '+91');
+    return `${dial}${phone}`;
+  }
+
+  private async sendViaTwilio(phone: string, code: string): Promise<void> {
+    const sid = this.config.get<string>('twilio.accountSid') ?? '';
+    const token = this.config.get<string>('twilio.authToken') ?? '';
+    const from = this.config.get<string>('twilio.fromNumber') ?? '';
+    const minutes = Math.round(this.config.get<number>('otp.ttlSeconds', 300) / 60);
+
+    const body = new URLSearchParams({
+      To: this.toE164(phone),
+      From: from,
+      Body: `${code} is your Evently login code. It expires in ${minutes} minutes. Do not share it with anyone.`,
+    });
+
+    let response: Response;
+    try {
+      response = await fetch(
+        `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Basic ${Buffer.from(`${sid}:${token}`).toString('base64')}`,
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: body.toString(),
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
+    } catch (err) {
+      this.logger.error(`Twilio unreachable: ${(err as Error).message}`);
+      throw new ServiceUnavailableException('Could not send the code. Please try again.');
+    }
+
+    if (!response.ok) {
+      // Twilio's own reason (bad number, unverified trial recipient, …) for the
+      // logs; never the code, never the credentials.
+      const detail = await response.text().catch(() => '');
+      this.logger.error(`Twilio refused the SMS (${response.status}): ${detail.slice(0, 300)}`);
+      throw new ServiceUnavailableException('Could not send the code. Please try again.');
+    }
   }
 }

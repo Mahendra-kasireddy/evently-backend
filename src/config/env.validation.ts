@@ -30,7 +30,12 @@ export const envValidationSchema = Joi.object({
   JWT_REFRESH_EXPIRES_IN: Joi.string().default('7d'),
 
   // OTP
-  OTP_DELIVERY: Joi.string().valid('stub', 'sms').default('stub'),
+  /**
+   * THE OTP switch. `test`: no SMS is sent and 123456 logs in (for APK
+   * testing). `twilio`: a real SMS through Twilio, and only that code works.
+   * Change it in .env locally, or in the Render dashboard for the live server.
+   */
+  OTP_MODE: Joi.string().valid('test', 'twilio').default('test'),
   OTP_LENGTH: Joi.number().default(6),
   OTP_TTL_SECONDS: Joi.number().default(300),
   OTP_MAX_ATTEMPTS: Joi.number().default(5),
@@ -54,9 +59,22 @@ export const envValidationSchema = Joi.object({
   MAIL_FROM: Joi.string().optional(),
 
   // SMS (Twilio) — optional
-  TWILIO_ACCOUNT_SID: Joi.string().allow('').optional(),
-  TWILIO_AUTH_TOKEN: Joi.string().allow('').optional(),
-  TWILIO_FROM_NUMBER: Joi.string().allow('').optional(),
+  // Required when OTP_MODE=twilio, so a server that cannot send refuses to start.
+  TWILIO_ACCOUNT_SID: Joi.when('OTP_MODE', {
+    is: 'twilio',
+    then: Joi.string().required(),
+    otherwise: Joi.string().allow('').optional(),
+  }),
+  TWILIO_AUTH_TOKEN: Joi.when('OTP_MODE', {
+    is: 'twilio',
+    then: Joi.string().required(),
+    otherwise: Joi.string().allow('').optional(),
+  }),
+  TWILIO_FROM_NUMBER: Joi.when('OTP_MODE', {
+    is: 'twilio',
+    then: Joi.string().required(),
+    otherwise: Joi.string().allow('').optional(),
+  }),
 
   // Push (Firebase) — optional
   FIREBASE_PROJECT_ID: Joi.string().allow('').optional(),
