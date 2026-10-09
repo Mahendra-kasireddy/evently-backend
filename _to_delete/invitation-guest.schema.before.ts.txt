@@ -62,6 +62,23 @@ export class GuestShare {
 export const GuestShareSchema = SchemaFactory.createForClass(GuestShare);
 
 /**
+ * Someone the customer shared their published invitation with.
+ *
+ * A guest is not a user: no account, no password, no login. Identity is the
+ * token below, which is the whole point — the spec forbids guest registration,
+ * so the link itself has to carry who the guest is.
+ *
+ * Its own collection rather than an array on the invitation because every
+ * guest visit is a lookup *by token*, which against an embedded array would
+ * mean scanning invitations. A guest list also grows to hundreds where
+ * `subEvents` grows to a handful.
+ */
+@Schema({
+  timestamps: true,
+  collection: 'invitation_guests',
+  toJSON: idJsonTransform(),
+})
+/**
  * A notice this guest has been shown and has dismissed.
  *
  * Kept against the guest rather than in a collection of its own: it is a fact
@@ -88,23 +105,6 @@ export class GuestNotification {
 }
 export const GuestNotificationSchema = SchemaFactory.createForClass(GuestNotification);
 
-/**
- * Someone the customer shared their published invitation with.
- *
- * A guest is not a user: no account, no password, no login. Identity is the
- * token below, which is the whole point — the spec forbids guest registration,
- * so the link itself has to carry who the guest is.
- *
- * Its own collection rather than an array on the invitation because every
- * guest visit is a lookup *by token*, which against an embedded array would
- * mean scanning invitations. A guest list also grows to hundreds where
- * `subEvents` grows to a handful.
- */
-@Schema({
-  timestamps: true,
-  collection: 'invitation_guests',
-  toJSON: idJsonTransform(),
-})
 export class InvitationGuest {
   @Prop({ type: Types.ObjectId, ref: 'Invitation', required: true, index: true })
   invitation: Types.ObjectId;
