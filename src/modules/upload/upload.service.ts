@@ -1,9 +1,18 @@
-import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
 import { randomUUID } from 'crypto';
 import { imageSize } from 'image-size';
 
-import { StorageDriver, UploadedFileMeta } from './interfaces/storage-driver.interface';
+import {
+  DeleteOutcome,
+  StorageDriver,
+  StoredObject,
+  StoredRef,
+  UploadedFileMeta,
+} from './interfaces/storage-driver.interface';
+import { MediaAsset, MediaAssetStatus } from './schemas/media-asset.schema';
 import { CloudinaryStorageDriver } from './drivers/cloudinary.driver';
 import { LocalStorageDriver } from './drivers/local.driver';
 import { UPLOAD_RULES, UploadPurpose, UploadRule } from './upload.constants';
@@ -28,7 +37,17 @@ export class UploadService implements OnModuleInit {
   private driver!: StorageDriver;
   private local?: LocalStorageDriver;
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    /*
+     * Where each stored file is recorded (see MediaAsset). Optional so a
+     * caller without Mongo — a unit test, a script — can still upload; such
+     * files simply go unrecorded, which means they are never auto-deleted.
+     */
+    @Optional()
+    @InjectModel(MediaAsset.name)
+    private readonly assets?: Model<MediaAsset>,
+  ) {}
 
   onModuleInit(): void {
     const driver = this.config.get<string>('upload.driver', 'local');
@@ -61,8 +80,16 @@ export class UploadService implements OnModuleInit {
     this.logger.log(`Upload driver: local (${dir})`);
   }
 
-  /** Validates and stores one file, returning its metadata. */
-  async upload(file: IncomingFile | undefined, purpose: UploadPurpose): Promise<UploadedFileMeta> {
+  /**
+   * Validates and stores one file, returning its metadata. `ownerId` is the
+   * signed-in uploader (from the JWT, never the request body); guest uploads
+   * pass none.
+   */
+  async upload(
+    file: IncomingFile | undefined,
+    purpose: UploadPurpose,
+    ownerId?: string,
+  ): Promise<UploadedFileMeta> {
     if (!file || !file.buffer?.length) {
       throw new BadRequestException('No file provided');
     }
@@ -79,6 +106,7 @@ export class UploadService implements OnModuleInit {
     )}/${randomUUID()}.${ext}`;
 
     const stored = await this.driver.put(key, file.buffer, file.mimetype);
+    await this.record(key, stored, purpose, ownerId);
 
     return {
       fileName: key.split('/').pop() as string,
@@ -120,13 +148,77 @@ export class UploadService implements OnModuleInit {
        reads `…/<uuid>.thumb.webp` and not `…/<uuid>.jpg.thumb.webp`. */
     const base = originalKey.replace(/\.[^./]+$/, '');
     const key = `${base}.${suffix}.${extension}`;
-    const { url } = await this.driver.put(key, body, contentType);
-    return { key, url };
+    const stored = await this.driver.put(key, body, contentType);
+    await this.record(key, stored, 'variant');
+    return { key, url: stored.url };
   }
 
-  /** Removes a previously uploaded object (best-effort). */
-  remove(key: string): Promise<void> {
-    return this.driver.remove(key);
+  /**
+   * Removes a previously uploaded object (best-effort, never throws) — for
+   * flows that own their files outright, like an invitation's memories. A
+   * failure is recorded so the cleanup script can retry it.
+   */
+  async remove(key: string): Promise<void> {
+    try {
+      const asset = await this.assets?.findOne({ key }).lean().exec();
+      await this.deleteStored({
+        key,
+        publicId: asset?.publicId,
+        resourceType: asset?.resourceType,
+      });
+      await this.assets
+        ?.updateOne(
+          { key },
+          { status: MediaAssetStatus.DELETED, deletedAt: new Date(), lastError: '' },
+        )
+        .exec();
+    } catch (err) {
+      const message = errorText(err);
+      this.logger.warn(`Failed to delete stored file "${key}": ${message}`);
+      await this.assets
+        ?.updateOne(
+          { key },
+          {
+            status: MediaAssetStatus.DELETE_FAILED,
+            lastError: message,
+            lastAttemptAt: new Date(),
+            $inc: { deleteAttempts: 1 },
+          },
+        )
+        .exec()
+        .catch(() => undefined);
+    }
+  }
+
+  /** Strict deletion through the configured driver — throws on failure. */
+  deleteStored(ref: StoredRef): Promise<DeleteOutcome> {
+    return this.driver.delete(ref);
+  }
+
+  /**
+   * Records a stored file. Never fails the upload: a file that could not be
+   * recorded is merely untracked, and untracked files are never auto-deleted.
+   */
+  private async record(
+    key: string,
+    stored: StoredObject,
+    purpose: string,
+    ownerId?: string,
+  ): Promise<void> {
+    if (!this.assets) return;
+    try {
+      await this.assets.create({
+        key,
+        url: stored.url,
+        provider: stored.provider,
+        publicId: stored.publicId ?? '',
+        resourceType: stored.resourceType ?? '',
+        purpose,
+        owner: ownerId && Types.ObjectId.isValid(ownerId) ? new Types.ObjectId(ownerId) : null,
+      });
+    } catch (err) {
+      this.logger.warn(`Could not record stored file "${key}": ${errorText(err)}`);
+    }
   }
 
   /** A locally-stored file's absolute path, traversal-checked. Only valid for the local driver. */
@@ -183,4 +275,11 @@ export class UploadService implements OnModuleInit {
     const dot = name.lastIndexOf('.');
     return dot >= 0 ? name.slice(dot + 1).toLowerCase() : '';
   }
+}
+
+/** An error's message, without its stack or any request options. */
+export function errorText(err: unknown): string {
+  const e = err as { message?: string; http_code?: number };
+  const text = (e?.message ?? String(err ?? 'unknown error')).slice(0, 300);
+  return e?.http_code ? `${text} [http ${e.http_code}]` : text;
 }

@@ -1,8 +1,10 @@
+import { AssetLifecycleService } from '../upload/asset-lifecycle.service';
 import {
   BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -92,6 +94,7 @@ export class PublicEventService {
     @InjectModel(EventTicket.name)
     private readonly ticketModel: Model<EventTicketDocument>,
     private readonly organizerService: OrganizerService,
+    @Optional() private readonly assets?: AssetLifecycleService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -169,6 +172,7 @@ export class PublicEventService {
   ): Promise<PublicEventDocument> {
     const event = await this.ownEvent(userId, eventId);
     this.assertEditable(event);
+    const previousCover = event.coverUrl;
 
     if (dto.title !== undefined) event.title = dto.title;
     if (dto.category !== undefined) event.category = dto.category;
@@ -203,6 +207,8 @@ export class PublicEventService {
     event.endDateTime = end;
 
     await event.save();
+    // The old cover goes only once the new one is saved, and only if unused.
+    this.assets?.releaseInBackground([previousCover], [event.coverUrl], userId);
     return event;
   }
 

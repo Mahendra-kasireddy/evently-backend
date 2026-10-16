@@ -1,4 +1,5 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { AssetLifecycleService } from '../upload/asset-lifecycle.service';
+import { ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Package, PackageDocument } from './schemas/package.schema';
@@ -60,6 +61,7 @@ export class PackageService {
     @InjectModel(OrganizerProfile.name)
     private readonly organizerModel: Model<OrganizerProfileDocument>,
     @InjectModel(Booking.name) private readonly bookingModel: Model<BookingDocument>,
+    @Optional() private readonly assets?: AssetLifecycleService,
   ) {}
 
   /** Active packages for the home carousel, in display order. */
@@ -219,20 +221,31 @@ export class PackageService {
       throw new NotFoundException('Package not found');
     }
 
-    return this.savePhoto(pkg, photo);
+    return this.savePhoto(pkg, photo, userId);
   }
 
-  /** The same, for an admin, on any package. */
-  async setPhotoAsAdmin(packageId: string, photo: StoredFile | null): Promise<PublicPackageView> {
-    return this.savePhoto(await this.findById(packageId), photo);
+  /**
+   * The same, for an admin, on any package. The old photo is only ever
+   * deleted if this admin uploaded it; an organizer's photo is kept.
+   */
+  async setPhotoAsAdmin(
+    packageId: string,
+    photo: StoredFile | null,
+    adminId?: string,
+  ): Promise<PublicPackageView> {
+    return this.savePhoto(await this.findById(packageId), photo, adminId);
   }
 
   private async savePhoto(
     pkg: PackageDocument,
     photo: StoredFile | null,
+    actorId?: string,
   ): Promise<PublicPackageView> {
+    const previous = pkg.photo?.url ?? '';
     pkg.photo = photo ? { ...photo, uploadedAt: photo.uploadedAt ?? new Date() } : null;
     await pkg.save();
+    // After the save: a failed save keeps the old photo, and its file.
+    if (actorId) this.assets?.releaseInBackground([previous], [pkg.photo?.url], actorId);
     const [view] = await this.toCustomerViews([pkg]);
     return view;
   }

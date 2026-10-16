@@ -19,6 +19,7 @@ import { UploadService } from './upload.service';
 import { UploadFileDto } from './dto/upload-file.dto';
 import { UploadedFileMeta } from './interfaces/storage-driver.interface';
 import { Public } from '../../common/decorators/public.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 // Hard ceiling, a little over the largest per-purpose limit (a 250MB video);
 // each purpose's own limit is enforced in the service.
@@ -55,8 +56,10 @@ export class UploadController {
   upload(
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: UploadFileDto,
+    @CurrentUser('userId') userId: string,
   ): Promise<UploadedFileMeta> {
-    return this.uploadService.upload(file, dto.purpose);
+    // The owner comes from the verified token, never from the request body.
+    return this.uploadService.upload(file, dto.purpose, userId);
   }
 
   /**

@@ -36,7 +36,7 @@ export class UserController {
   @Patch('updateProfile')
   updateProfile(@CurrentUser() user: AuthUser, @Body() dto: UpdateProfileDto) {
     this.userService.assertOwnUpload(dto.photoUrl);
-    return this.userService.update(user.userId, dto);
+    return this.userService.updateProfile(user.userId, dto);
   }
 
   /**

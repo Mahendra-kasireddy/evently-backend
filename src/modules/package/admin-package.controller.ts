@@ -5,6 +5,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
 import { StoredFile } from '../organizer/schemas/organizer-profile.schema';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 /**
  * Packages, as the admin console manages them.
@@ -27,7 +28,15 @@ export class AdminPackageController {
   }
 
   @Patch(':id/photo')
-  setPhoto(@Param('id') id: string, @Body() dto: SetPackagePhotoDto) {
-    return this.packageService.setPhotoAsAdmin(id, (dto.photo as StoredFile | undefined) ?? null);
+  setPhoto(
+    @Param('id') id: string,
+    @Body() dto: SetPackagePhotoDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.packageService.setPhotoAsAdmin(
+      id,
+      (dto.photo as StoredFile | undefined) ?? null,
+      adminId,
+    );
   }
 }

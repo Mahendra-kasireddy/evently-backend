@@ -1,3 +1,4 @@
+import { UploadModule } from '../upload/upload.module';
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { OrganizerService } from './organizer.service';
@@ -42,6 +43,7 @@ import { NotificationModule } from '../notification/notification.module';
 
 @Module({
   imports: [
+    UploadModule,
     MongooseModule.forFeature([
       { name: OrganizerProfile.name, schema: OrganizerProfileSchema },
       // Read-only here: the admin list needs each organizer's phone, which

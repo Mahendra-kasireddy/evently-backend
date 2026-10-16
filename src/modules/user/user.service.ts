@@ -4,8 +4,10 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { AssetLifecycleService } from '../upload/asset-lifecycle.service';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as bcrypt from 'bcryptjs';
@@ -25,6 +27,7 @@ export class UserService {
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     @InjectModel(Package.name) private readonly packageModel: Model<PackageDocument>,
     private readonly config: ConfigService,
+    @Optional() private readonly assets?: AssetLifecycleService,
   ) {}
 
   /**
@@ -226,6 +229,27 @@ export class UserService {
     const parts = name.trim().split(/\s+/).filter(Boolean);
     const letters = parts.slice(0, 2).map((p) => p[0]?.toUpperCase() ?? '');
     return letters.join('') || 'U';
+  }
+
+  /**
+   * A user's own profile edit. When the photo changes, the old one is let go
+   * of *after* the new one is saved — and only deleted if it was this user's
+   * upload and nothing else uses it (see AssetLifecycleService).
+   */
+  async updateProfile(
+    id: string,
+    dto: UpdateUserDto & { photoUrl?: string },
+  ): Promise<UserDocument> {
+    this.assertObjectId(id);
+    const previous =
+      dto.photoUrl !== undefined
+        ? ((await this.userModel.findById(id).select('photoUrl').lean().exec())?.photoUrl ?? '')
+        : '';
+    const user = await this.update(id, dto);
+    if (dto.photoUrl !== undefined) {
+      this.assets?.releaseInBackground([previous], [user.photoUrl], id);
+    }
+    return user;
   }
 
   async update(id: string, dto: UpdateUserDto): Promise<UserDocument> {

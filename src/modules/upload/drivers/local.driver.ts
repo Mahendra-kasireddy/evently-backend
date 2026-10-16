@@ -1,7 +1,12 @@
 import { Logger } from '@nestjs/common';
 import { promises as fs } from 'fs';
 import { dirname, join, resolve } from 'path';
-import { StorageDriver, StoredObject } from '../interfaces/storage-driver.interface';
+import {
+  DeleteOutcome,
+  StorageDriver,
+  StoredObject,
+  StoredRef,
+} from '../interfaces/storage-driver.interface';
 
 /**
  * Development-only storage driver. Writes files under a local directory and
@@ -31,9 +36,19 @@ export class LocalStorageDriver implements StorageDriver {
     return { url: `${base}${this.routePrefix}/${key}`, provider: 'local' };
   }
 
+  async delete(ref: StoredRef): Promise<DeleteOutcome> {
+    try {
+      await fs.unlink(this.safeJoin(ref.key));
+      return 'deleted';
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return 'not_found';
+      throw err;
+    }
+  }
+
   async remove(key: string): Promise<void> {
     try {
-      await fs.unlink(this.safeJoin(key));
+      await this.delete({ key });
     } catch (err) {
       this.logger.warn(`Failed to delete local file "${key}": ${String(err)}`);
     }

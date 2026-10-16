@@ -13,6 +13,11 @@
  * anything. `deleteMany` is used rather than dropping collections, so indexes
  * (including the unique ones on user phone/email) survive intact.
  *
+ * Stored files (Cloudinary) are never touched: this script only clears
+ * MongoDB documents, and it keeps `media_assets` (the upload ledger) so files
+ * whose records are cleared become *orphan candidates* for the separate,
+ * opt-in `npm run assets:cleanup` — never automatic deletions.
+ *
  * NOTE: after this, do NOT run `npm run seed` unless you want the demo user,
  * demo organizers, demo booking, notifications and quotes back — this script
  * deliberately leaves the config that `seed` also owns, so a re-seed is not
@@ -62,6 +67,8 @@ const KEEP = [
   'payment_methods',
   'working_days',
   'document_types',
+  // The upload ledger — see the header: files are cleaned up only on purpose.
+  'media_assets',
 ];
 
 const confirmed = process.argv.includes('--yes');

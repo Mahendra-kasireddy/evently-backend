@@ -1,3 +1,4 @@
+import { UploadModule } from '../upload/upload.module';
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { UserService } from './user.service';
@@ -17,6 +18,7 @@ import { Package, PackageSchema } from '../package/schemas/package.schema';
  */
 @Module({
   imports: [
+    UploadModule,
     MongooseModule.forFeature([
       { name: User.name, schema: UserSchema },
       { name: Booking.name, schema: BookingSchema },

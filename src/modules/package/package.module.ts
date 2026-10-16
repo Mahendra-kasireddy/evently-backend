@@ -1,3 +1,4 @@
+import { UploadModule } from '../upload/upload.module';
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { PackageService } from './package.service';
@@ -19,6 +20,7 @@ import { Booking, BookingSchema } from '../booking/schemas/booking.schema';
    * graphs — and BookingService already depends on this one.
    */
   imports: [
+    UploadModule,
     MongooseModule.forFeature([
       { name: Package.name, schema: PackageSchema },
       { name: OrganizerProfile.name, schema: OrganizerProfileSchema },

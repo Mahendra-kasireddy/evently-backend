@@ -5,7 +5,9 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+import { AssetLifecycleService } from '../upload/asset-lifecycle.service';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
@@ -245,6 +247,7 @@ export class OrganizerOnboardingService {
     private readonly userService: UserService,
     private readonly authService: AuthService,
     private readonly notificationService: NotificationService,
+    @Optional() private readonly assets?: AssetLifecycleService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -357,8 +360,11 @@ export class OrganizerOnboardingService {
     dto: UpdateOrganizerProfileDto,
   ): Promise<OrganizerProfileView> {
     const { profile, user } = await this.loadForEdit(userId);
+    const before = showcaseUrls(profile);
     this.applyBasic(profile, dto);
-    return this.finalizeSave(userId, profile, user);
+    const view = await this.finalizeSave(userId, profile, user);
+    this.assets?.releaseInBackground(before, showcaseUrls(profile), userId);
+    return view;
   }
 
   private applyBasic(profile: OrganizerProfileDocument, dto: UpdateOrganizerProfileDto): void {
@@ -479,6 +485,7 @@ export class OrganizerOnboardingService {
   /** Step 5 — Portfolio. */
   async updatePortfolio(userId: string, dto: UpdatePortfolioDto): Promise<OrganizerProfileView> {
     const { profile, user } = await this.loadForEdit(userId);
+    const before = showcaseUrls(profile);
 
     if (dto.tagline !== undefined) profile.tagline = dto.tagline;
     if (dto.businessDescription !== undefined)
@@ -496,7 +503,9 @@ export class OrganizerOnboardingService {
     if (dto.certificates !== undefined) profile.certificates = this.storedFiles(dto.certificates);
     if (dto.awards !== undefined) profile.awards = this.storedFiles(dto.awards);
 
-    return this.finalizeSave(userId, profile, user);
+    const view = await this.finalizeSave(userId, profile, user);
+    this.assets?.releaseInBackground(before, showcaseUrls(profile), userId);
+    return view;
   }
 
   // ---------------------------------------------------------------------------
@@ -973,4 +982,23 @@ export class OrganizerOnboardingService {
       this.logger.warn(`Organizer notification failed: ${String(err)}`);
     }
   }
+}
+
+/**
+ * The profile's showcase media — photos and videos the organizer replaces
+ * freely. Verification documents are deliberately left out: those are kept as
+ * the record of what was checked, and are never auto-deleted.
+ */
+function showcaseUrls(profile: {
+  profilePhoto?: { url?: string } | null;
+  coverPhoto?: { url?: string } | null;
+  gallery?: Array<{ url?: string }>;
+  videos?: Array<{ url?: string }>;
+}): string[] {
+  return [
+    profile.profilePhoto?.url,
+    profile.coverPhoto?.url,
+    ...(profile.gallery ?? []).map((f) => f?.url),
+    ...(profile.videos ?? []).map((f) => f?.url),
+  ].filter((u): u is string => !!u);
 }

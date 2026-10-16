@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "seed": "ts-node scripts/seed.ts",
     "reset:data": "ts-node scripts/reset-data.ts",
+    "assets:cleanup": "ts-node scripts/assets-cleanup.ts",
     "check:user": "ts-node scripts/check-user.ts",
     "test": "jest --passWithNoTests",
     "check:di": "ts-node --transpile-only --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\"}' test/di-check.ts",

@@ -1,6 +1,11 @@
 import { BadGatewayException, Logger } from '@nestjs/common';
 import { v2 as cloudinary, UploadApiOptions, UploadApiResponse } from 'cloudinary';
-import { StorageDriver, StoredObject } from '../interfaces/storage-driver.interface';
+import {
+  DeleteOutcome,
+  StorageDriver,
+  StoredObject,
+  StoredRef,
+} from '../interfaces/storage-driver.interface';
 
 export interface CloudinaryDriverConfig {
   cloudName: string;
@@ -95,19 +100,48 @@ export class CloudinaryStorageDriver implements StorageDriver {
     };
   }
 
+  /**
+   * Deletes one asset by the `public_id` and resource type Cloudinary gave it
+   * (falling back to the ones its key maps to). Refuses anything outside the
+   * app's folder or with an unexpected shape, so no caller can reach another
+   * part of the account. "not found" counts as done: a retry after a
+   * timed-out success must not be an error.
+   */
+  async delete(ref: StoredRef): Promise<DeleteOutcome> {
+    const resourceType = ref.resourceType || resourceTypeOf(ref.key, '');
+    const publicId = ref.publicId || this.publicIdOf(ref.key, resourceType);
+    this.assertManaged(publicId, resourceType);
+    const res = (await cloudinary.uploader.destroy(publicId, {
+      resource_type: resourceType,
+      invalidate: true,
+    })) as { result?: string } | undefined;
+    if (res?.result === 'ok') return 'deleted';
+    if (res?.result === 'not found') return 'not_found';
+    throw new Error(`Cloudinary did not delete "${publicId}" (${res?.result ?? 'no result'})`);
+  }
+
   async remove(key: string): Promise<void> {
-    const resourceType = resourceTypeOf(key, '');
     try {
-      await cloudinary.uploader.destroy(this.publicIdOf(key, resourceType), {
-        resource_type: resourceType,
-        invalidate: true,
-      });
+      await this.delete({ key });
     } catch (err) {
       // Deletion is best-effort — never let an orphaned asset break a flow.
       const e = err as { message?: string };
       this.logger.warn(
         `Failed to delete Cloudinary asset "${key}": ${e?.message ?? 'unknown error'}`,
       );
+    }
+  }
+
+  /** Only Evently's own assets, by a well-formed id, of a known type. */
+  private assertManaged(publicId: string, resourceType: string): void {
+    const inFolder = this.folder ? publicId.startsWith(`${this.folder}/`) : true;
+    if (
+      !inFolder ||
+      publicId.includes('..') ||
+      !/^[A-Za-z0-9_\-./]+$/.test(publicId) ||
+      !['image', 'video', 'raw'].includes(resourceType)
+    ) {
+      throw new Error(`Refusing to delete an asset outside Evently's storage: "${publicId}"`);
     }
   }
 

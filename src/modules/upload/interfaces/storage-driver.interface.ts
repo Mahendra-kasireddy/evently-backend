@@ -37,10 +37,25 @@ export interface StoredObject {
   duration?: number;
 }
 
+/** How to find a stored object again: the key, and the provider's own id when known. */
+export interface StoredRef {
+  key: string;
+  publicId?: string;
+  resourceType?: 'image' | 'video' | 'raw' | '';
+}
+
+/** What a strict deletion found: gone now, or already gone (both are success). */
+export type DeleteOutcome = 'deleted' | 'not_found';
+
 /** What a storage backend must implement. Swappable via env (cloudinary | local). */
 export interface StorageDriver {
   /** Persists the buffer under `key` and returns where it can be read. */
   put(key: string, body: Buffer, contentType: string): Promise<StoredObject>;
-  /** Removes an object (best-effort). */
+  /**
+   * Deletes one object, throwing if the provider could not. Refuses an
+   * identifier outside Evently's own storage. Safe to repeat.
+   */
+  delete(ref: StoredRef): Promise<DeleteOutcome>;
+  /** Removes an object (best-effort: never throws). */
   remove(key: string): Promise<void>;
 }
