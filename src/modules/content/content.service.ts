@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Content, ContentDocument } from './schemas/content.schema';
+import { CONTENT_DEFAULTS } from '../metadata/metadata.defaults';
 import { Booking, BookingDocument, BookingStatus } from '../booking/schemas/booking.schema';
 import {
   OnboardingStatus,
@@ -34,6 +35,8 @@ export const CUSTOMER_HOME_KEY = 'customer-home';
 
 @Injectable()
 export class ContentService {
+  private readonly logger = new Logger(ContentService.name);
+
   constructor(
     @InjectModel(Content.name) private readonly contentModel: Model<ContentDocument>,
     @InjectModel(Booking.name) private readonly bookingModel: Model<BookingDocument>,
@@ -41,13 +44,25 @@ export class ContentService {
     private readonly organizerModel: Model<OrganizerProfileDocument>,
   ) {}
 
-  /** Returns the editable copy blob for a content key. */
+  /**
+   * Returns the editable copy blob for a content key.
+   *
+   * The admin-edited copy in `site_content` when there is one; otherwise the
+   * built-in default, so Home and Plan keep working on a new or emptied
+   * database instead of failing. Only a key with no default is a 404.
+   */
   async getData(key: string): Promise<Record<string, unknown>> {
     const doc = await this.contentModel.findOne({ key }).exec();
-    if (!doc) {
-      throw new NotFoundException(`Content "${key}" not found — run the seed.`);
+    if (doc) return doc.data;
+    const fallback = CONTENT_DEFAULTS[key];
+    if (fallback) {
+      this.logger.warn(
+        `site_content "${key}" is missing — serving the built-in default. ` +
+          'Run `npm run seed:config` or save it from the admin console.',
+      );
+      return fallback;
     }
-    return doc.data;
+    throw new NotFoundException(`Content "${key}" not found`);
   }
 
   /**

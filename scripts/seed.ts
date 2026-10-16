@@ -1,12 +1,37 @@
 /**
- * Idempotent seed script. Run with: npm run seed
+ * DEMO seed — development only. Run with: npm run seed:demo -- --yes
  *
- * Populates the collections that back the customer home screen with the same
- * content that used to be hard-coded in the frontend. Re-running replaces the
- * seeded documents (matched by a stable natural key), so it's safe to repeat.
+ * Adds SAMPLE packages and SAMPLE organizer profiles (fake businesses), and —
+ * when SEED_DEMO_PHONE is set — a demo user profile, booking, notifications
+ * and quotes. None of that belongs in a real database.
+ *
+ * The app's real setup data (options + Home/Plan content) comes from
+ * `npm run seed:config`; this script also inserts it where missing, but never
+ * overwrites a record that already exists.
+ *
+ * Refuses to run with NODE_ENV=production or a MONGO_URI that looks like
+ * production, and without --yes.
  */
 import 'dotenv/config';
 import mongoose from 'mongoose';
+import {
+  customerHomeContent,
+  planOccasions,
+  planCities,
+  planGuestRanges,
+  planBudgetRanges,
+  planServiceCategories,
+  customerPlanContent,
+  businessTypes,
+  organizerCategories,
+  experienceRanges,
+  teamSizes,
+  languages,
+  travelOptions,
+  paymentMethods,
+  workingDays,
+  documentTypes,
+} from '../src/modules/metadata/metadata.defaults';
 
 const MONGO_URI = process.env.MONGO_URI;
 if (!MONGO_URI) {
@@ -204,11 +229,28 @@ const organizers = [
     rating: 4.8,
     reviews: 500,
     events: 1000,
-    tags: ['Full service', 'Catering', 'Decor', 'Photography', 'Music', 'Priest', 'Mehendi', 'Transport'],
+    tags: [
+      'Full service',
+      'Catering',
+      'Decor',
+      'Photography',
+      'Music',
+      'Priest',
+      'Mehendi',
+      'Transport',
+    ],
     location: 'Hyderabad',
     serviceAreas: [
-      'Hyderabad', 'Banjara Hills', 'Jubilee Hills', 'Gachibowli', 'Madhapur',
-      'Kondapur', 'Kukatpally', 'Miyapur', 'Secunderabad', 'Financial District',
+      'Hyderabad',
+      'Banjara Hills',
+      'Jubilee Hills',
+      'Gachibowli',
+      'Madhapur',
+      'Kondapur',
+      'Kukatpally',
+      'Miyapur',
+      'Secunderabad',
+      'Financial District',
     ],
     occasions: ['wedding', 'birthday', 'housewarming', 'naming', 'anniversary', 'corporate'],
     capacityMin: 10,
@@ -259,7 +301,9 @@ async function seedDemoUser() {
   const users = mongoose.connection.collection('users');
   const user = await users.findOne({ phone });
   if (!user) {
-    console.log(`• skipped demo user profile — no user with phone ${phone}. Log in once, then re-run.`);
+    console.log(
+      `• skipped demo user profile — no user with phone ${phone}. Log in once, then re-run.`,
+    );
     return;
   }
   await users.updateOne(
@@ -305,9 +349,24 @@ async function seedDemoBooking() {
           { label: 'Completed', done: false },
         ],
         timeline: [
-          { status: 'pending', label: 'Booking placed — awaiting organizer confirmation', note: '', at: new Date('2026-06-01') },
-          { status: 'confirmed', label: 'Organizer confirmed your booking', note: '', at: new Date('2026-06-02') },
-          { status: 'in_progress', label: 'Your event is now in progress', note: '', at: new Date('2026-06-20') },
+          {
+            status: 'pending',
+            label: 'Booking placed — awaiting organizer confirmation',
+            note: '',
+            at: new Date('2026-06-01'),
+          },
+          {
+            status: 'confirmed',
+            label: 'Organizer confirmed your booking',
+            note: '',
+            at: new Date('2026-06-02'),
+          },
+          {
+            status: 'in_progress',
+            label: 'Your event is now in progress',
+            note: '',
+            at: new Date('2026-06-20'),
+          },
         ],
         status: 'in_progress',
         updatedAt: new Date(),
@@ -318,166 +377,6 @@ async function seedDemoBooking() {
   );
   console.log(`✓ demo booking attached to ${phone}`);
 }
-
-// ---- customer-home content (copy / CMS) ----
-const customerHomeContent = {
-  nav: [
-    { label: 'Home', to: '/home', active: true },
-    { label: 'Plan event', to: '/plan' },
-    { label: 'Discover', to: '/discover' },
-    { label: 'My events', to: '/workspace' },
-  ],
-  hero: {
-    greetingTemplate: 'Namaste, {name}',
-    headingLead: 'What shall we ',
-    headingAccent: 'celebrate',
-    headingTail: ' next?',
-    subtitle:
-      'Tell us the occasion — verified organizers send tailored quotes within a day. You compare, you choose, they handle everything.',
-    // The values under this label are the planner's starting selection - the
-    // same for every account - so it must read as a prompt, not as a record of
-    // what this customer has already told us. Their real event is shown from
-    // their own plan/request/booking instead.
-    draftLabel: 'PLAN YOUR EVENT · TAP TO CHOOSE',
-    defaultDraft: { occasion: 'Wedding', when: '28 Dec', where: 'Hyderabad', guests: '300' },
-    options: {
-      occasion: ['Wedding', 'Birthday', 'Housewarming', 'Naming ceremony', 'Anniversary', 'Corporate'],
-      when: ['28 Dec', '5 Jan', '14 Feb', '1 Mar', '20 Apr', '15 May'],
-      where: ['Hyderabad', 'Bangalore', 'Chennai', 'Mumbai', 'Pune', 'Delhi'],
-      guests: ['50', '100', '200', '300', '500', '800'],
-    },
-    trust: [
-      { icon: 'zap', label: 'Quotes in under a day' },
-      { icon: 'shield', label: 'Verified organizers only' },
-      { icon: 'star', label: '4.8 average rating' },
-    ],
-  },
-  planSection: {
-    title: 'Plan any celebration',
-    occasions: [
-      { id: 'wedding', icon: 'heart', art: 'wedding', label: 'Wedding', cta: 'Start planning' },
-      { id: 'birthday', icon: 'gift', art: 'birthday', label: 'Birthday', cta: 'Start planning' },
-      { id: 'housewarming', icon: 'home', art: 'housewarming', label: 'Housewarming', cta: 'Start planning' },
-      { id: 'naming', icon: 'sparkles', art: 'naming', label: 'Naming', cta: 'Start planning' },
-      { id: 'anniversary', icon: 'star', art: 'anniversary', label: 'Anniversary', cta: 'Start planning' },
-      { id: 'corporate', icon: 'briefcase', art: 'corporate', label: 'Corporate', cta: 'Start planning' },
-    ],
-  },
-  howItWorks: {
-    title: 'How Evently works',
-    subtitle: 'Idea to celebration in four steps — you stay in control the whole way.',
-    steps: [
-      { num: '01', icon: 'edit', title: 'Tell us the occasion', description: 'Share your date, city, guests and budget in two minutes.' },
-      { num: '02', icon: 'file', title: 'Get tailored quotes', description: 'Verified organizers reply with itemised quotes within a day.' },
-      { num: '03', icon: 'chart', title: 'Compare side by side', description: 'Line-item breakdowns, ratings and anomaly alerts — no guesswork.' },
-      { num: '04', icon: 'shield', title: 'Book with confidence', description: 'Pay a 30% advance; your organizer runs every vendor.' },
-    ],
-  },
-  topOrganizers: { title: 'Top organizers near you', seeAllLabel: 'See all' },
-  packages: {
-    title: 'Curated packages by budget',
-    subtitle: 'Pre-matched bundles to kick-start your planning — fully customisable.',
-    buildLabel: 'Build your own',
-  },
-  tools: {
-    title: 'Plan smarter with built-in tools',
-    subtitle: 'Stay on budget and on schedule — free with every event you plan.',
-    tools: [
-      { id: 'budget', icon: 'wallet', title: 'Budget estimator', description: 'Instant city-based price ranges before you commit.' },
-      { id: 'guests', icon: 'users', title: 'Guest list', description: 'Track invites, RSVPs and headcount in one place.' },
-      { id: 'checklist', icon: 'list', title: 'Planning checklist', description: 'Auto-built timeline so nothing slips through.' },
-      { id: 'reminders', icon: 'bell', title: 'Smart reminders', description: 'Nudges for payments, tastings and walkthroughs.' },
-    ],
-  },
-};
-
-// ---- Plan Event normalized config collections ----
-// Occasions offered on the wizard's first step.
-const planOccasions = [
-  { key: 'wedding', label: 'Wedding', art: 'wedding', order: 0, active: true },
-  { key: 'birthday', label: 'Birthday', art: 'birthday', order: 1, active: true },
-  { key: 'housewarming', label: 'Housewarming', art: 'housewarming', order: 2, active: true },
-  { key: 'naming', label: 'Naming', art: 'naming', order: 3, active: true },
-  { key: 'anniversary', label: 'Anniversary', art: 'anniversary', order: 4, active: true },
-  { key: 'corporate', label: 'Corporate', art: 'corporate', order: 5, active: true },
-];
-
-// City options for the "event details" step.
-const planCities = [
-  { name: 'Hyderabad', order: 0, active: true },
-  { name: 'Bangalore', order: 1, active: true },
-  { name: 'Chennai', order: 2, active: true },
-  { name: 'Mumbai', order: 3, active: true },
-  { name: 'Pune', order: 4, active: true },
-  { name: 'Delhi', order: 5, active: true },
-];
-
-// Coarse guest-count buckets.
-const planGuestRanges = [
-  { value: '50', order: 0, active: true },
-  { value: '100', order: 1, active: true },
-  { value: '200', order: 2, active: true },
-  { value: '300', order: 3, active: true },
-  { value: '500+', order: 4, active: true },
-];
-
-// Optional budget buckets (display strings). Configurable — tune without a deploy.
-const planBudgetRanges = [
-  { value: 'Under ₹1L', order: 0, active: true },
-  { value: '₹1L – 3L', order: 1, active: true },
-  { value: '₹3L – 5L', order: 2, active: true },
-  { value: '₹5L – 10L', order: 3, active: true },
-  { value: '₹10L+', order: 4, active: true },
-];
-
-// Service categories the customer can request; `keywords` drive organizer matching.
-const planServiceCategories = [
-  { key: 'food', title: 'Food / Catering', subtitle: 'Per-plate menu', icon: 'food', keywords: ['catering', 'food', 'full service'], order: 0, active: true },
-  { key: 'water', title: 'Drinking Water', subtitle: 'Branded bottles', icon: 'water', keywords: ['water', 'catering', 'full service'], order: 1, active: true },
-  { key: 'decoration', title: 'Decoration', subtitle: 'Theme & florals', icon: 'decor', keywords: ['decor', 'decoration', 'full service'], order: 2, active: true },
-  { key: 'photography', title: 'Photography & Video', subtitle: 'Photos, reels, album', icon: 'photo', keywords: ['photo', 'photography', 'full service'], order: 3, active: true },
-  { key: 'music', title: 'Music & Sound', subtitle: 'DJ / live band', icon: 'music', keywords: ['music', 'sound', 'dj', 'full service'], order: 4, active: true },
-  { key: 'priest', title: 'Priest / Pandit', subtitle: 'Rituals & muhurtham', icon: 'priest', keywords: ['priest', 'pandit', 'full service'], order: 5, active: true },
-  { key: 'mehendi', title: 'Mehendi Artist', subtitle: 'Bridal & guests', icon: 'mehendi', keywords: ['mehendi', 'full service'], order: 6, active: true },
-  { key: 'transport', title: 'Transportation', subtitle: 'Guest pickup', icon: 'transport', keywords: ['transport', 'travel', 'full service'], order: 7, active: true },
-];
-
-// ---- customer-plan content (Plan Event wizard copy/config — CMS only) ----
-const customerPlanContent = {
-  steps: [
-    { id: 'details', label: 'Event details', heading: '', subtitle: 'Share a few details and your ideas. Verified organizers send tailored quotes — no pricing needed now.' },
-    { id: 'categories', label: 'Categories', heading: "What's on your checklist?", subtitle: 'Choose the services you need. Organizers quote only for what you select — nothing extra.' },
-    { id: 'organizers', label: 'Find organizers', heading: 'Find your perfect organizer', subtitle: 'Verified, certified and rated by real families. Compare, request quotes, and book the one that fits.' },
-    { id: 'review', label: 'Review', heading: 'Review & submit', subtitle: 'Check everything looks right, then submit your plan and request a quote. You can go back and edit any step.' },
-  ],
-  subtitle: 'Share a few details and your ideas. Verified organizers send tailored quotes — no pricing needed now.',
-  trust: [
-    { icon: 'zap', label: 'Quotes in a day' },
-    { icon: 'shield', label: 'Verified organizers' },
-    { icon: 'calendar', label: 'Free to plan' },
-  ],
-  whatNext: [
-    { icon: 'file', title: 'Get tailored quotes', desc: 'Verified organizers reply within a day' },
-    { icon: 'chart', title: 'Compare side by side', desc: 'Itemised, transparent breakdowns' },
-    { icon: 'heart', title: 'Book & relax', desc: 'Your organizer runs every vendor' },
-  ],
-  ideas: {
-    title: 'Your ideas & special requests',
-    subtitle: 'Surprises, inspirations, must-haves — in your own words. Your organizer plans around them, so nothing gets missed.',
-    suggestions: ['Surprise entry', 'Live food counters', 'Drone photography', 'Marigold & maroon theme', 'Eco-friendly setup', 'Kids play zone'],
-    placeholder: 'e.g. Surprise drone petal-shower during the garland exchange, marigold theme, a live dosa counter for the cousins…',
-  },
-  budgetBanner: 'Budget is optional. Share a rough range to help organizers tailor quotes, or skip it — you compare and pick what fits either way.',
-  quoteNote: { title: 'Quotation by organizers', text: 'No budget needed now — price is finalized after organizers review your needs.' },
-  continueLabel: 'Continue to categories',
-  footnote: 'Verified organizers only. Comparing quotes is always free.',
-  filters: {
-    tiers: ['Bronze', 'Silver', 'Gold', 'Platinum'],
-    ratings: ['4.0+', '4.5+', '4.8+'],
-    categories: ['Catering', 'Decoration', 'Photography', 'Music & Sound'],
-    sorts: ['Sort: Rating', 'Price', 'Most events', '4.5+ ★'],
-  },
-};
 
 async function seedPlanConfig() {
   const sets: Array<{ collection: string; key: string; docs: Record<string, unknown>[] }> = [
@@ -492,35 +391,13 @@ async function seedPlanConfig() {
     for (const doc of docs) {
       await coll.updateOne(
         { [key]: doc[key] }, // natural key
-        { $set: { ...doc, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+        { $setOnInsert: { ...doc, createdAt: new Date(), updatedAt: new Date() } },
         { upsert: true },
       );
     }
     console.log(`✓ ${collection} seeded (${docs.length})`);
   }
 }
-
-// ---- Organizer onboarding config collections (Step 1) ----
-// Business/legal structure options.
-const businessTypes = [
-  { key: 'individual', label: 'Individual / Freelancer', order: 0, active: true },
-  { key: 'sole_proprietor', label: 'Sole Proprietorship', order: 1, active: true },
-  { key: 'partnership', label: 'Partnership', order: 2, active: true },
-  { key: 'llp', label: 'Limited Liability Partnership (LLP)', order: 3, active: true },
-  { key: 'private_limited', label: 'Private Limited Company', order: 4, active: true },
-  { key: 'agency', label: 'Agency', order: 5, active: true },
-];
-
-// Kind-of-organizer categories (distinct from customer service categories).
-const organizerCategories = [
-  { key: 'wedding_planner', label: 'Wedding Planner', icon: 'heart', order: 0, active: true },
-  { key: 'event_decorator', label: 'Event Decorator', icon: 'sparkles', order: 1, active: true },
-  { key: 'caterer', label: 'Caterer', icon: 'utensils', order: 2, active: true },
-  { key: 'photographer', label: 'Photographer / Videographer', icon: 'camera', order: 3, active: true },
-  { key: 'full_service', label: 'Full-Service Event Company', icon: 'briefcase', order: 4, active: true },
-  { key: 'birthday_planner', label: 'Birthday & Party Planner', icon: 'gift', order: 5, active: true },
-  { key: 'corporate_events', label: 'Corporate Events', icon: 'building', order: 6, active: true },
-];
 
 async function seedOrganizerConfig() {
   const sets: Array<{ collection: string; key: string; docs: Record<string, unknown>[] }> = [
@@ -532,67 +409,13 @@ async function seedOrganizerConfig() {
     for (const doc of docs) {
       await coll.updateOne(
         { [key]: doc[key] }, // natural key
-        { $set: { ...doc, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+        { $setOnInsert: { ...doc, createdAt: new Date(), updatedAt: new Date() } },
         { upsert: true },
       );
     }
     console.log(`✓ ${collection} seeded (${docs.length})`);
   }
 }
-
-// ---- Organizer services config collections (Step 4) ----
-const experienceRanges = [
-  { key: '0-1', label: 'Less than 1 year', order: 0, active: true },
-  { key: '1-3', label: '1–3 years', order: 1, active: true },
-  { key: '3-5', label: '3–5 years', order: 2, active: true },
-  { key: '5-10', label: '5–10 years', order: 3, active: true },
-  { key: '10+', label: '10+ years', order: 4, active: true },
-];
-const teamSizes = [
-  { key: 'solo', label: 'Just me', order: 0, active: true },
-  { key: '2-5', label: '2–5 people', order: 1, active: true },
-  { key: '6-10', label: '6–10 people', order: 2, active: true },
-  { key: '11-25', label: '11–25 people', order: 3, active: true },
-  { key: '25+', label: '25+ people', order: 4, active: true },
-];
-const languages = [
-  { key: 'english', label: 'English', order: 0, active: true },
-  { key: 'hindi', label: 'Hindi', order: 1, active: true },
-  { key: 'telugu', label: 'Telugu', order: 2, active: true },
-  { key: 'tamil', label: 'Tamil', order: 3, active: true },
-  { key: 'kannada', label: 'Kannada', order: 4, active: true },
-  { key: 'marathi', label: 'Marathi', order: 5, active: true },
-  { key: 'bengali', label: 'Bengali', order: 6, active: true },
-];
-const travelOptions = [
-  { key: 'no_travel', label: 'No travel', order: 0, active: true },
-  { key: 'city_only', label: 'Within city', order: 1, active: true },
-  { key: 'state_wide', label: 'Within state', order: 2, active: true },
-  { key: 'pan_india', label: 'Anywhere in India', order: 3, active: true },
-  { key: 'international', label: 'International', order: 4, active: true },
-];
-const paymentMethods = [
-  { key: 'cash', label: 'Cash', order: 0, active: true },
-  { key: 'upi', label: 'UPI', order: 1, active: true },
-  { key: 'bank_transfer', label: 'Bank transfer', order: 2, active: true },
-  { key: 'card', label: 'Credit / Debit card', order: 3, active: true },
-  { key: 'cheque', label: 'Cheque', order: 4, active: true },
-];
-const workingDays = [
-  { key: 'mon', label: 'Monday', order: 0, active: true },
-  { key: 'tue', label: 'Tuesday', order: 1, active: true },
-  { key: 'wed', label: 'Wednesday', order: 2, active: true },
-  { key: 'thu', label: 'Thursday', order: 3, active: true },
-  { key: 'fri', label: 'Friday', order: 4, active: true },
-  { key: 'sat', label: 'Saturday', order: 5, active: true },
-  { key: 'sun', label: 'Sunday', order: 6, active: true },
-];
-const documentTypes = [
-  { key: 'aadhaar', label: 'Aadhaar Card', order: 0, active: true },
-  { key: 'passport', label: 'Passport', order: 1, active: true },
-  { key: 'voter_id', label: 'Voter ID', order: 2, active: true },
-  { key: 'driving_license', label: 'Driving License', order: 3, active: true },
-];
 
 async function seedOrganizerServicesConfig() {
   const sets: Array<{ collection: string; docs: Record<string, unknown>[] }> = [
@@ -609,7 +432,7 @@ async function seedOrganizerServicesConfig() {
     for (const doc of docs) {
       await coll.updateOne(
         { key: doc.key },
-        { $set: { ...doc, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+        { $setOnInsert: { ...doc, createdAt: new Date(), updatedAt: new Date() } },
         { upsert: true },
       );
     }
@@ -622,16 +445,24 @@ async function seedContent() {
   await coll.updateOne(
     { key: 'customer-home' },
     {
-      $set: { key: 'customer-home', data: customerHomeContent, updatedAt: new Date() },
-      $setOnInsert: { createdAt: new Date() },
+      $setOnInsert: {
+        key: 'customer-home',
+        data: customerHomeContent,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
     },
     { upsert: true },
   );
   await coll.updateOne(
     { key: 'customer-plan' },
     {
-      $set: { key: 'customer-plan', data: customerPlanContent, updatedAt: new Date() },
-      $setOnInsert: { createdAt: new Date() },
+      $setOnInsert: {
+        key: 'customer-plan',
+        data: customerPlanContent,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
     },
     { upsert: true },
   );
@@ -724,10 +555,44 @@ async function seedDemoQuotes() {
   if (!request) return;
 
   const makeLines = (food: number, water: number, decor: number, photo: number) => [
-    { key: 'food', title: 'Food / Catering', subtitle: '300 plates', price: food, note: 'Menu customisable at the tasting.', subItems: [{ label: 'Veg deluxe thali', value: `300 × ₹${Math.round(food / 300)}` }, { label: 'Welcome drinks', value: 'Included' }] },
-    { key: 'water', title: 'Drinking Water', subtitle: '400 bottles', price: water, note: '', subItems: [{ label: 'Branded 500ml bottles', value: `400 × ₹${Math.round(water / 400)}` }] },
-    { key: 'decoration', title: 'Decoration', subtitle: 'Theme & florals', price: decor, note: '', subItems: [{ label: 'Stage & mandap', value: 'Included' }, { label: 'Fresh florals', value: 'Marigold & rose' }] },
-    { key: 'photography', title: 'Photography & Video', subtitle: 'Full coverage', price: photo, note: '', subItems: [{ label: 'Candid + traditional', value: '2 shooters' }] },
+    {
+      key: 'food',
+      title: 'Food / Catering',
+      subtitle: '300 plates',
+      price: food,
+      note: 'Menu customisable at the tasting.',
+      subItems: [
+        { label: 'Veg deluxe thali', value: `300 × ₹${Math.round(food / 300)}` },
+        { label: 'Welcome drinks', value: 'Included' },
+      ],
+    },
+    {
+      key: 'water',
+      title: 'Drinking Water',
+      subtitle: '400 bottles',
+      price: water,
+      note: '',
+      subItems: [{ label: 'Branded 500ml bottles', value: `400 × ₹${Math.round(water / 400)}` }],
+    },
+    {
+      key: 'decoration',
+      title: 'Decoration',
+      subtitle: 'Theme & florals',
+      price: decor,
+      note: '',
+      subItems: [
+        { label: 'Stage & mandap', value: 'Included' },
+        { label: 'Fresh florals', value: 'Marigold & rose' },
+      ],
+    },
+    {
+      key: 'photography',
+      title: 'Photography & Video',
+      subtitle: 'Full coverage',
+      price: photo,
+      note: '',
+      subItems: [{ label: 'Candid + traditional', value: '2 shooters' }],
+    },
   ];
 
   const build = (org: typeof orgA, lines: ReturnType<typeof makeLines>) => {
@@ -762,6 +627,20 @@ async function seedDemoQuotes() {
 }
 
 async function main() {
+  // Demo data must never reach a real database.
+  if (process.env.NODE_ENV === 'production' || /prod/i.test(MONGO_URI as string)) {
+    console.error(
+      'Refusing to run the DEMO seed against production. Use `npm run seed:config` there.',
+    );
+    process.exit(1);
+  }
+  if (!process.argv.includes('--yes')) {
+    console.error(
+      'This adds SAMPLE packages and organizers (fake data). Re-run with `npm run seed:demo -- --yes`\n' +
+        'if this database is for development. For real setup data only, use `npm run seed:config`.',
+    );
+    process.exit(1);
+  }
   await mongoose.connect(MONGO_URI as string);
   console.log('connected to MongoDB');
   await seedPackages();

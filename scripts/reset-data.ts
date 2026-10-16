@@ -18,10 +18,9 @@
  * whose records are cleared become *orphan candidates* for the separate,
  * opt-in `npm run assets:cleanup` — never automatic deletions.
  *
- * NOTE: after this, do NOT run `npm run seed` unless you want the demo user,
- * demo organizers, demo booking, notifications and quotes back — this script
- * deliberately leaves the config that `seed` also owns, so a re-seed is not
- * needed just to make the app work.
+ * NOTE: the setup data this keeps is all the app needs. If a database ever
+ * lacks it, `npm run seed:config` adds just that (insert-only, safe anywhere).
+ * `npm run seed:demo` adds SAMPLE packages/organizers — development only.
  */
 import 'dotenv/config';
 import mongoose from 'mongoose';

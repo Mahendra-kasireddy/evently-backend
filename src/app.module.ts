@@ -18,6 +18,7 @@ import { PackageModule } from './modules/package/package.module';
 import { OrganizerModule } from './modules/organizer/organizer.module';
 import { BookingModule } from './modules/booking/booking.module';
 import { ContentModule } from './modules/content/content.module';
+import { MetadataModule } from './modules/metadata/metadata.module';
 import { NotificationModule } from './modules/notification/notification.module';
 import { QuoteModule } from './modules/quote/quote.module';
 import { HomeModule } from './modules/home/home.module';
@@ -80,6 +81,7 @@ import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
     OrganizerModule,
     BookingModule,
     ContentModule,
+    MetadataModule,
     NotificationModule,
     QuoteModule,
     HomeModule,
