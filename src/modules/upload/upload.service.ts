@@ -3,9 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { imageSize } from 'image-size';
 
-import { StorageDriver } from './interfaces/storage-driver.interface';
-import { UploadedFileMeta } from './interfaces/storage-driver.interface';
-import { S3StorageDriver } from './drivers/s3.driver';
+import { StorageDriver, UploadedFileMeta } from './interfaces/storage-driver.interface';
+import { CloudinaryStorageDriver } from './drivers/cloudinary.driver';
 import { LocalStorageDriver } from './drivers/local.driver';
 import { UPLOAD_RULES, UploadPurpose, UploadRule } from './upload.constants';
 
@@ -19,8 +18,9 @@ export interface IncomingFile {
 
 /**
  * Generic, reusable upload service. Validates against per-purpose rules, then
- * delegates persistence to a swappable storage driver (S3-compatible in prod,
- * local disk in dev). Returns metadata only — file bytes never touch Mongo.
+ * delegates persistence to a swappable storage driver (Cloudinary in
+ * production, local disk in development). Returns metadata only — file bytes
+ * never touch Mongo.
  */
 @Injectable()
 export class UploadService implements OnModuleInit {
@@ -32,35 +32,33 @@ export class UploadService implements OnModuleInit {
 
   onModuleInit(): void {
     const driver = this.config.get<string>('upload.driver', 'local');
-    const publicBaseUrl = this.config.get<string>('upload.publicBaseUrl', '');
 
-    if (driver === 's3') {
-      this.driver = new S3StorageDriver({
-        endpoint: this.config.get<string>('upload.s3.endpoint') || undefined,
-        region: this.config.get<string>('upload.s3.region', 'us-east-1'),
-        bucket: this.config.get<string>('upload.s3.bucket', ''),
-        accessKeyId: this.config.get<string>('upload.s3.accessKeyId', ''),
-        secretAccessKey: this.config.get<string>('upload.s3.secretAccessKey', ''),
-        forcePathStyle: this.config.get<boolean>('upload.s3.forcePathStyle', false),
-        publicBaseUrl,
+    if (driver === 'cloudinary') {
+      // Throws on missing credentials — env validation already requires them,
+      // this is the second line for a misconfigured ConfigService.
+      this.driver = new CloudinaryStorageDriver({
+        cloudName: this.config.get<string>('upload.cloudinary.cloudName', ''),
+        apiKey: this.config.get<string>('upload.cloudinary.apiKey', ''),
+        apiSecret: this.config.get<string>('upload.cloudinary.apiSecret', ''),
+        folder: this.config.get<string>('upload.cloudinary.folder', 'evently'),
       });
-      this.logger.log('Upload driver: s3');
-    } else {
-      const dir = this.config.get<string>('upload.local.dir', 'uploads');
-      this.local = new LocalStorageDriver(dir, publicBaseUrl);
-      this.driver = this.local;
-      this.logger.log(`Upload driver: local (${dir})`);
-      if (process.env.NODE_ENV === 'production') {
-        // Not fatal — uploads still work — but on a container host (Render,
-        // Fly, Kubernetes) this disk is wiped on every deploy and restart, and
-        // every uploaded photo and document goes with it.
-        this.logger.warn(
-          'UPLOAD_DRIVER is "local" in production: uploaded files are stored on the container disk ' +
-            'and will be lost on the next deploy or restart. Set UPLOAD_DRIVER=s3 with an S3-compatible ' +
-            'bucket (S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_ENDPOINT, UPLOAD_PUBLIC_BASE_URL).',
-        );
-      }
+      this.logger.log('Upload driver: cloudinary');
+      return;
     }
+
+    if (process.env.NODE_ENV === 'production') {
+      // env.validation refuses this too; kept so a test or script that skips
+      // validation still cannot quietly write production files to a wiped disk.
+      throw new Error(
+        'UPLOAD_DRIVER=local is not allowed in production: the container disk is wiped on every deploy. ' +
+          'Set UPLOAD_DRIVER=cloudinary with CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET.',
+      );
+    }
+    const dir = this.config.get<string>('upload.local.dir', 'uploads');
+    const publicBaseUrl = this.config.get<string>('upload.publicBaseUrl', '');
+    this.local = new LocalStorageDriver(dir, publicBaseUrl);
+    this.driver = this.local;
+    this.logger.log(`Upload driver: local (${dir})`);
   }
 
   /** Validates and stores one file, returning its metadata. */
@@ -80,16 +78,23 @@ export class UploadService implements OnModuleInit {
       '0',
     )}/${randomUUID()}.${ext}`;
 
-    const url = await this.driver.put(key, file.buffer, file.mimetype);
+    const stored = await this.driver.put(key, file.buffer, file.mimetype);
 
     return {
       fileName: key.split('/').pop() as string,
       originalName: file.originalname,
       mimeType: file.mimetype,
       size: file.size,
-      url,
+      url: stored.url,
       key,
       uploadedAt: now.toISOString(),
+      provider: stored.provider,
+      publicId: stored.publicId,
+      resourceType: stored.resourceType,
+      format: stored.format,
+      width: stored.width,
+      height: stored.height,
+      duration: stored.duration,
     };
   }
 
@@ -115,7 +120,7 @@ export class UploadService implements OnModuleInit {
        reads `…/<uuid>.thumb.webp` and not `…/<uuid>.jpg.thumb.webp`. */
     const base = originalKey.replace(/\.[^./]+$/, '');
     const key = `${base}.${suffix}.${extension}`;
-    const url = await this.driver.put(key, body, contentType);
+    const { url } = await this.driver.put(key, body, contentType);
     return { key, url };
   }
 

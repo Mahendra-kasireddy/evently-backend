@@ -1,12 +1,14 @@
 import { Logger } from '@nestjs/common';
 import { promises as fs } from 'fs';
 import { dirname, join, resolve } from 'path';
-import { StorageDriver } from '../interfaces/storage-driver.interface';
+import { StorageDriver, StoredObject } from '../interfaces/storage-driver.interface';
 
 /**
  * Development-only storage driver. Writes files under a local directory and
  * returns a URL served by the Upload controller (`GET /upload/file/:key`).
- * NEVER intended for production — use the S3 driver there.
+ * NEVER for production — a container host's disk is wiped on every deploy and
+ * restart. Production uses the Cloudinary driver; startup refuses `local`
+ * there (see env.validation.ts).
  */
 export class LocalStorageDriver implements StorageDriver {
   private readonly logger = new Logger(LocalStorageDriver.name);
@@ -20,13 +22,13 @@ export class LocalStorageDriver implements StorageDriver {
     this.root = resolve(process.cwd(), dir);
   }
 
-  async put(key: string, body: Buffer, contentType: string): Promise<string> {
+  async put(key: string, body: Buffer, contentType: string): Promise<StoredObject> {
     void contentType; // content type is irrelevant on disk; served route re-derives it
     const dest = this.safeJoin(key);
     await fs.mkdir(dirname(dest), { recursive: true });
     await fs.writeFile(dest, body);
     const base = this.publicBaseUrl ? this.publicBaseUrl.replace(/\/+$/, '') : '';
-    return `${base}${this.routePrefix}/${key}`;
+    return { url: `${base}${this.routePrefix}/${key}`, provider: 'local' };
   }
 
   async remove(key: string): Promise<void> {
@@ -35,11 +37,6 @@ export class LocalStorageDriver implements StorageDriver {
     } catch (err) {
       this.logger.warn(`Failed to delete local file "${key}": ${String(err)}`);
     }
-  }
-
-  /** Reads a stored file for the serving route. Throws if the key escapes root. */
-  read(key: string): Promise<Buffer> {
-    return fs.readFile(this.safeJoin(key));
   }
 
   /**

@@ -4,6 +4,9 @@ import * as Joi from 'joi';
  * Validates process.env at boot. The app refuses to start if anything
  * required is missing or malformed — fail fast instead of at first request.
  */
+const LOCAL_IN_PRODUCTION =
+  'UPLOAD_DRIVER=local is not allowed in production (the disk is wiped on every deploy) — use cloudinary';
+
 export const envValidationSchema = Joi.object({
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
   /** Confirms paid public-event tickets without the gateway. Ignored in production. */
@@ -81,9 +84,40 @@ export const envValidationSchema = Joi.object({
   FIREBASE_CLIENT_EMAIL: Joi.string().allow('').optional(),
   FIREBASE_PRIVATE_KEY: Joi.string().allow('').optional(),
 
-  // Uploads. `local` (default) needs nothing else; `s3` requires bucket + keys.
-  UPLOAD_DRIVER: Joi.string().valid('local', 's3').default('local'),
+  /*
+   * Uploads. `cloudinary` (the production default) needs the three
+   * CLOUDINARY_* credentials; `local` needs nothing else and is refused in
+   * production, where the container disk is wiped on every deploy.
+   */
+  UPLOAD_DRIVER: Joi.string()
+    .valid('local', 'cloudinary')
+    .default((parent: { NODE_ENV?: string }) =>
+      parent.NODE_ENV === 'production' ? 'cloudinary' : 'local',
+    )
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.invalid('local').messages({
+        'any.invalid': LOCAL_IN_PRODUCTION,
+        'any.only': LOCAL_IN_PRODUCTION,
+      }),
+    }),
   UPLOAD_PUBLIC_BASE_URL: Joi.string().allow('').optional(),
+  CLOUDINARY_CLOUD_NAME: Joi.string().when('UPLOAD_DRIVER', {
+    is: 'cloudinary',
+    then: Joi.required(),
+    otherwise: Joi.allow('').optional(),
+  }),
+  CLOUDINARY_API_KEY: Joi.string().when('UPLOAD_DRIVER', {
+    is: 'cloudinary',
+    then: Joi.required(),
+    otherwise: Joi.allow('').optional(),
+  }),
+  CLOUDINARY_API_SECRET: Joi.string().when('UPLOAD_DRIVER', {
+    is: 'cloudinary',
+    then: Joi.required(),
+    otherwise: Joi.allow('').optional(),
+  }),
+  CLOUDINARY_FOLDER: Joi.string().allow('').optional(),
 
   // WhatsApp guest sharing. 'handoff' needs nothing; 'cloud' needs the rest,
   // which the provider checks at send time and reports rather than assuming.
@@ -99,12 +133,6 @@ export const envValidationSchema = Joi.object({
   PUBLIC_WEB_URL: Joi.string().allow('').optional(),
   PUBLIC_APP_LINK: Joi.string().allow('').optional(),
   UPLOAD_LOCAL_DIR: Joi.string().default('uploads'),
-  S3_ENDPOINT: Joi.string().allow('').optional(),
-  S3_REGION: Joi.string().default('us-east-1'),
-  S3_FORCE_PATH_STYLE: Joi.boolean().optional(),
-  S3_BUCKET: Joi.string().when('UPLOAD_DRIVER', { is: 's3', then: Joi.required() }),
-  S3_ACCESS_KEY_ID: Joi.string().when('UPLOAD_DRIVER', { is: 's3', then: Joi.required() }),
-  S3_SECRET_ACCESS_KEY: Joi.string().when('UPLOAD_DRIVER', { is: 's3', then: Joi.required() }),
 
   /*
    * Razorpay. Optional so the API boots without a gateway; the payment routes

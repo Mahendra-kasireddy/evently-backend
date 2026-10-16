@@ -114,24 +114,38 @@ export default () => ({
     webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET ?? '',
   },
 
-  // Reusable file-upload module. `driver=s3` for any S3-compatible store
-  // (AWS S3, Cloudflare R2, DigitalOcean Spaces, MinIO); `driver=local` for
-  // development only (files written under `local.dir`, served via /upload/file).
-  upload: {
-    driver: process.env.UPLOAD_DRIVER ?? 'local',
-    // Public base URL used to build returned file URLs (e.g. CDN / bucket host).
-    publicBaseUrl: process.env.UPLOAD_PUBLIC_BASE_URL ?? '',
-    s3: {
-      endpoint: process.env.S3_ENDPOINT || undefined, // set for R2/Spaces/MinIO
-      region: process.env.S3_REGION ?? 'us-east-1',
-      bucket: process.env.S3_BUCKET,
-      accessKeyId: process.env.S3_ACCESS_KEY_ID,
-      secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
-      // Path-style is required by MinIO and some S3-compatible providers.
-      forcePathStyle: process.env.S3_FORCE_PATH_STYLE === 'true',
+  // Reusable file-upload module. `driver=cloudinary` in production (images,
+  // videos and documents on Cloudinary's CDN); `driver=local` for development
+  // only (files written under `local.dir`, served via /upload/file).
+  upload: uploadConfig(),
+});
+
+/**
+ * Upload settings. The driver defaults to Cloudinary in production and to the
+ * local disk elsewhere; env validation refuses `local` in production.
+ *
+ * `publicBaseUrl` is the host every stored file's URL starts with — it is what
+ * `UserService.assertOwnUpload` checks a profile photo against. Under
+ * Cloudinary it defaults to this cloud's delivery host.
+ */
+function uploadConfig() {
+  const production = process.env.NODE_ENV === 'production';
+  const driver = process.env.UPLOAD_DRIVER || (production ? 'cloudinary' : 'local');
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME ?? '';
+  const explicitBase = process.env.UPLOAD_PUBLIC_BASE_URL ?? '';
+  return {
+    driver,
+    publicBaseUrl:
+      explicitBase ||
+      (driver === 'cloudinary' && cloudName ? `https://res.cloudinary.com/${cloudName}` : ''),
+    cloudinary: {
+      cloudName,
+      apiKey: process.env.CLOUDINARY_API_KEY ?? '',
+      apiSecret: process.env.CLOUDINARY_API_SECRET ?? '',
+      folder: process.env.CLOUDINARY_FOLDER || 'evently',
     },
     local: {
       dir: process.env.UPLOAD_LOCAL_DIR ?? 'uploads',
     },
-  },
-});
+  };
+}

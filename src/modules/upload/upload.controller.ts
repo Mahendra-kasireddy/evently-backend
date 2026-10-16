@@ -60,7 +60,8 @@ export class UploadController {
   }
 
   /**
-   * Dev-only static serving for the local driver. The wildcard captures the
+   * Dev-only static serving for the local driver (404 under Cloudinary, whose
+   * URLs point straight at its CDN). The wildcard captures the
    * full storage key (which contains slashes). Public so <img> tags resolve.
    */
   @Public()
