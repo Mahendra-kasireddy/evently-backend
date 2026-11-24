@@ -1,9 +1,15 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 
 import { UserService } from '../user/user.service';
+import { AdminTeamService } from '../user/admin-team.service';
 import { UserDocument, UserStatus } from '../user/schemas/user.schema';
 import { Role } from '../../common/enums/role.enum';
 import { RegisterDto } from './dto/register.dto';
@@ -11,6 +17,7 @@ import { LoginDto } from './dto/login.dto';
 import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { OtpService } from './otp.service';
+import { OtpPurpose } from './schemas/otp.schema';
 
 export interface TokenPair {
   accessToken: string;
@@ -24,19 +31,32 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
     private readonly otpService: OtpService,
+    private readonly adminTeam: AdminTeamService,
   ) {}
 
   // ----- phone OTP (passwordless) -----
 
   /** Step 1: issue an OTP for a mobile number. */
   async sendOtp(dto: SendOtpDto) {
+    if (dto.purpose === 'register' && (await this.userService.findByPhone(dto.mobile))) {
+      throw new ConflictException('This number is already registered. Sign in to continue.');
+    }
+    if (dto.purpose === 'admin_signup') {
+      // Invite-only: no code is sent to a number nobody invited.
+      if (!(await this.adminTeam.hasPendingInvite(dto.mobile))) {
+        throw new ForbiddenException(
+          'This number hasn’t been invited to Evently Admin. Ask an admin to invite you.',
+        );
+      }
+      return this.otpService.issue(dto.mobile, OtpPurpose.ADMIN_SIGNUP);
+    }
     const issued = await this.otpService.issue(dto.mobile);
     return issued; // { requestId, sentTo, devCode? }
   }
 
   /** Step 2: verify the code, then find-or-create the customer and start a session. */
   async verifyOtp(dto: VerifyOtpDto) {
-    const phone = await this.otpService.verify(dto.requestId, dto.code);
+    const { phone, purpose } = await this.otpService.verify(dto.requestId, dto.code);
     const { user, isNew } = await this.userService.findOrCreateByPhone(phone);
     /*
      * A suspended account must not get a session here either.
@@ -47,6 +67,9 @@ export class AuthService {
      * still a rejection.
      */
     this.assertActive(user);
+    // An admin sign-up code: the number is proven, so the invite is honoured
+    // and the session below already carries the admin role.
+    if (purpose === OtpPurpose.ADMIN_SIGNUP) await this.adminTeam.acceptInvite(user);
     const tokens = await this.issueSession(user);
     return {
       token: tokens.accessToken,

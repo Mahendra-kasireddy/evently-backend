@@ -20,6 +20,7 @@
     "reset:data": "ts-node scripts/reset-data.ts",
     "assets:cleanup": "ts-node scripts/assets-cleanup.ts",
     "check:user": "ts-node scripts/check-user.ts",
+    "invite:admin": "ts-node scripts/invite-admin.ts",
     "test": "jest --passWithNoTests",
     "check:di": "ts-node --transpile-only --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\"}' test/di-check.ts",
     "check:coupons": "ts-node --transpile-only --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\"}' test/coupon-check.ts",

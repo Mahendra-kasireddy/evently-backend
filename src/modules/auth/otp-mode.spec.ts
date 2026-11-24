@@ -32,11 +32,11 @@ const id = new Types.ObjectId().toString();
 
 describe('OTP_MODE', () => {
   it('test: 123456 logs in', async () => {
-    await expect((await serviceFor('test')).verify(id, TEST_OTP)).resolves.toBe('9876543210');
+    await expect((await serviceFor('test')).verify(id, TEST_OTP)).resolves.toMatchObject({ phone: '9876543210' });
   });
 
   it('test: the real code still works too', async () => {
-    await expect((await serviceFor('test')).verify(id, '987654')).resolves.toBe('9876543210');
+    await expect((await serviceFor('test')).verify(id, '987654')).resolves.toMatchObject({ phone: '9876543210' });
   });
 
   it('twilio: 123456 is just a wrong code', async () => {
@@ -46,7 +46,7 @@ describe('OTP_MODE', () => {
   });
 
   it('twilio: the SMS code logs in', async () => {
-    await expect((await serviceFor('twilio')).verify(id, '987654')).resolves.toBe('9876543210');
+    await expect((await serviceFor('twilio')).verify(id, '987654')).resolves.toMatchObject({ phone: '9876543210' });
   });
 
   describe('boot validation', () => {

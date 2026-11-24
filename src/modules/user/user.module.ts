@@ -5,6 +5,9 @@ import { UserService } from './user.service';
 import { AdminUserService } from './admin-user.service';
 import { UserController } from './user.controller';
 import { AdminUserController } from './admin-user.controller';
+import { AdminTeamService } from './admin-team.service';
+import { AdminTeamController } from './admin-team.controller';
+import { AdminInvite, AdminInviteSchema } from './schemas/admin-invite.schema';
 import { User, UserSchema } from './schemas/user.schema';
 import { Booking, BookingSchema } from '../booking/schemas/booking.schema';
 import { QuoteRequest, QuoteRequestSchema } from '../quote/schemas/quote-request.schema';
@@ -21,6 +24,7 @@ import { Package, PackageSchema } from '../package/schemas/package.schema';
     UploadModule,
     MongooseModule.forFeature([
       { name: User.name, schema: UserSchema },
+      { name: AdminInvite.name, schema: AdminInviteSchema },
       { name: Booking.name, schema: BookingSchema },
       { name: QuoteRequest.name, schema: QuoteRequestSchema },
       { name: PlanSubmission.name, schema: PlanSubmissionSchema },
@@ -29,8 +33,8 @@ import { Package, PackageSchema } from '../package/schemas/package.schema';
       { name: Package.name, schema: PackageSchema },
     ]),
   ],
-  controllers: [UserController, AdminUserController],
-  providers: [UserService, AdminUserService],
-  exports: [UserService],
+  controllers: [UserController, AdminUserController, AdminTeamController],
+  providers: [UserService, AdminUserService, AdminTeamService],
+  exports: [UserService, AdminTeamService],
 })
 export class UserModule {}

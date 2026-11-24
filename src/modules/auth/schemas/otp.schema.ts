@@ -5,6 +5,8 @@ export type OtpDocument = HydratedDocument<Otp>;
 
 export enum OtpPurpose {
   LOGIN = 'login',
+  /** Issued only to a number with a pending admin invite; verifying it accepts the invite. */
+  ADMIN_SIGNUP = 'admin_signup',
 }
 
 @Schema({ timestamps: true, collection: 'otps' })

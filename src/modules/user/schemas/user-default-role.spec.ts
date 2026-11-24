@@ -15,7 +15,9 @@ describe('resolveDefaultRole', () => {
 
   it('keeps an explicit choice while the account still holds that role', () => {
     expect(resolveDefaultRole([Role.CUSTOMER, Role.ORGANIZER], Role.CUSTOMER)).toBe(Role.CUSTOMER);
-    expect(resolveDefaultRole([Role.CUSTOMER, Role.ORGANIZER, Role.VENDOR], Role.VENDOR)).toBe(Role.VENDOR);
+    expect(resolveDefaultRole([Role.CUSTOMER, Role.ORGANIZER, Role.VENDOR], Role.VENDOR)).toBe(
+      Role.VENDOR,
+    );
   });
 
   it('ignores a stored choice the account no longer holds', () => {

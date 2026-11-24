@@ -37,7 +37,7 @@ export class OtpService {
   }
 
   /** Generates, stores (hashed), and delivers an OTP for a phone number. */
-  async issue(phone: string): Promise<IssuedOtp> {
+  async issue(phone: string, purpose: OtpPurpose = OtpPurpose.LOGIN): Promise<IssuedOtp> {
     const length = this.config.get<number>('otp.length', 6);
     const ttl = this.config.get<number>('otp.ttlSeconds', 300);
 
@@ -50,7 +50,7 @@ export class OtpService {
     const doc = await this.otpModel.create({
       phone,
       codeHash,
-      purpose: OtpPurpose.LOGIN,
+      purpose,
       expiresAt: new Date(Date.now() + ttl * 1000),
     });
 
@@ -64,10 +64,11 @@ export class OtpService {
   }
 
   /**
-   * Verifies a code against an issued OTP. Returns the phone on success.
+   * Verifies a code against an issued OTP. Returns the phone, and what the
+   * code was issued for, on success.
    * Enforces single-use, expiry, and a max-attempts ceiling.
    */
-  async verify(requestId: string, code: string): Promise<string> {
+  async verify(requestId: string, code: string): Promise<{ phone: string; purpose: OtpPurpose }> {
     if (!Types.ObjectId.isValid(requestId)) {
       throw new NotFoundException('Invalid or expired OTP request');
     }
@@ -98,7 +99,7 @@ export class OtpService {
 
     otp.consumed = true;
     await otp.save();
-    return otp.phone;
+    return { phone: otp.phone, purpose: otp.purpose ?? OtpPurpose.LOGIN };
   }
 
   /**

@@ -294,7 +294,8 @@ async function main() {
     } as any,
     { signAsync: async () => 'token' } as any,
     { get: () => '1h' } as any,
-    { verify: async () => '9000000002' } as any,
+    { verify: async () => ({ phone: '9000000002', purpose: 'login' }) } as any,
+    { acceptInvite: async () => undefined, hasPendingInvite: async () => false } as any,
   );
 
   const rejects = async (fn: () => Promise<unknown>) => {
